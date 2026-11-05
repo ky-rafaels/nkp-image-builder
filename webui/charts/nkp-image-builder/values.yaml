@@ -167,14 +167,14 @@ ingress:
     # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     # nginx.ingress.kubernetes.io/proxy-buffering: "off"
   hosts:
-    - host: nkp-image-builder.10.38.48.51.nip.io
+    - host: nkp-image-builder.10.38.48.141.nip.io
       paths:
         - path: /
           pathType: Prefix
   tls: 
     - secretName: nkp-image-builder-tls
       hosts:
-        - nkp-image-builder.10.38.48.51.nip.io
+        - nkp-image-builder.10.38.48.141.nip.io
 
 nodeSelector: {}
 tolerations: []
