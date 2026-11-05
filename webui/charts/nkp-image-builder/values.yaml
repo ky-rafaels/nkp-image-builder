@@ -119,7 +119,7 @@ features:
 # ingress / oauth2-proxy for anything beyond a lab.
 auth:
   basic:
-    enabled: false
+    enabled: true
     username: admin
     password: "nutanix/4u"
     existingSecret: ""   # keys: username, password
