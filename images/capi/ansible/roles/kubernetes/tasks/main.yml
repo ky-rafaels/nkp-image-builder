@@ -20,6 +20,13 @@
   ansible.builtin.import_tasks: azurelinux.yml
   when: kubernetes_source_type == "pkg" and ansible_facts['os_family'] in ["Microsoft Azure Linux"]
 
+- name: Fail if FIPS is requested on a distribution without FIPS Kubernetes packages
+  ansible.builtin.fail:
+    msg: >-
+      FIPS Kubernetes packages are only wired up for RPM-based distributions
+      (kubernetes_rpm_repo); {{ ansible_facts['distribution'] }} is not supported.
+  when: fips_enabled | bool and not (kubernetes_source_type == "pkg" and ansible_facts['os_family'] == "RedHat")
+
 - name: Import RedHat Kubernetes tasks
   ansible.builtin.import_tasks: redhat.yml
   when: kubernetes_source_type == "pkg" and ansible_facts['os_family'] == "RedHat"
@@ -36,6 +43,7 @@
 # as the cri-containerd tarball also includes crictl.
 - name: Import crictl URL tasks
   ansible.builtin.import_tasks: crictl-url.yml
+  when: not (fips_enabled | bool)
 
 - name: Create kubelet default config file
   ansible.builtin.template:

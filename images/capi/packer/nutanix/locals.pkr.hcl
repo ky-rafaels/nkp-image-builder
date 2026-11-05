@@ -8,8 +8,19 @@ locals {
   # packer/config/kubernetes.json
   kubernetes_deb_gpg_key = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/deb/Release.key"
   kubernetes_deb_repo    = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/deb/"
-  kubernetes_rpm_gpg_key = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/repodata/repomd.xml.key"
-  kubernetes_rpm_repo    = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/"
+  kubernetes_rpm_gpg_key = var.fips_enabled ? var.fips_kubernetes_rpm_gpg_key : "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/repodata/repomd.xml.key"
+  kubernetes_rpm_repo = var.fips_enabled ? (
+    var.fips_kubernetes_rpm_repo != "" ? var.fips_kubernetes_rpm_repo : "https://packages.d2iq.com/konvoy/stable/linux/repos/el/kubernetes-${var.kubernetes_semver}-fips/x86_64"
+  ) : "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/"
+
+  # FIPS: see the fips_* variables. Everything below collapses to the
+  # non-FIPS values when fips_enabled is false.
+  kubernetes_container_registry = var.fips_enabled ? var.fips_kubernetes_container_registry : var.kubernetes_container_registry
+  kubernetes_build_metadata     = var.fips_enabled ? var.fips_kubernetes_build_metadata : ""
+  containerd_version            = var.fips_enabled ? var.fips_containerd_version : var.containerd_version
+  containerd_fips_url = var.fips_enabled ? (
+    var.fips_containerd_url != "" ? var.fips_containerd_url : "https://packages.d2iq.com/dkp/containerd/containerd-${var.fips_containerd_version}-d2iq.1-rhel-9.6-x86_64_fips.tar.gz"
+  ) : ""
 
   # packer/config/wasm-shims.json
   containerd_wasm_shims_url = "https://github.com/deislabs/containerd-wasm-shims/releases/download/${var.containerd_wasm_shims_version}/containerd-wasm-shims-<RTVERSION>-<SHIM>-linux-x86_64.tar.gz"
@@ -71,7 +82,7 @@ locals {
     "pause_image=${var.pause_image}",
     "containerd_additional_settings=${(var.containerd_additional_settings != null ? var.containerd_additional_settings : "")}",
     "containerd_cri_socket=${var.containerd_cri_socket}",
-    "containerd_version=${var.containerd_version}",
+    "containerd_version=${local.containerd_version}",
     "containerd_image_pull_progress_timeout=${(var.containerd_image_pull_progress_timeout != null ? var.containerd_image_pull_progress_timeout : "")}",
     "containerd_enable_limit_no_file=${var.containerd_enable_limit_no_file}",
     "containerd_wasm_shims_url=${local.containerd_wasm_shims_url}",
@@ -98,7 +109,7 @@ locals {
     "kubernetes_apiserver_port=${var.kubernetes_apiserver_port}",
     "kubernetes_cni_http_source=${var.kubernetes_cni_http_source}",
     "kubernetes_http_source=${var.kubernetes_http_source}",
-    "kubernetes_container_registry=${var.kubernetes_container_registry}",
+    "kubernetes_container_registry=${local.kubernetes_container_registry}",
     "kubernetes_rpm_repo=${local.kubernetes_rpm_repo}",
     "kubernetes_rpm_gpg_key=${local.kubernetes_rpm_gpg_key}",
     "kubernetes_rpm_gpg_check=${var.kubernetes_rpm_gpg_check}",
@@ -145,5 +156,11 @@ locals {
     "containerd_service_url=${local.containerd_service_url}",
     "netplan_removal_excludes=\"${var.netplan_removal_excludes}\"",
     "image_builder_version=${var.ib_version}",
+    "fips_enabled=${var.fips_enabled}",
+    "containerd_fips_url=${local.containerd_fips_url}",
+    "containerd_fips_sha256=${var.fips_enabled ? var.fips_containerd_sha256 : ""}",
+    "kubernetes_build_metadata=${local.kubernetes_build_metadata}",
+    "kubernetes_coredns_image_repository=${var.fips_enabled ? var.fips_coredns_image_repository : ""}",
+    "kubernetes_etcd_image_tag=${var.fips_enabled ? var.fips_etcd_image_tag : ""}",
   ])
 }

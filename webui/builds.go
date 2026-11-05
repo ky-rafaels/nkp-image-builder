@@ -49,6 +49,9 @@ type BuildRequest struct {
 	ExtraDebs   string            `json:"extraDebs,omitempty"`
 	ExtraRPMs   string            `json:"extraRpms,omitempty"`
 	ExtraVars   map[string]string `json:"extraVars,omitempty"`
+	// FIPS builds a FIPS 140 image: FIPS kernel mode and crypto policy plus
+	// FIPS builds of Kubernetes, containerd and runc.
+	FIPS bool `json:"fips,omitempty"`
 
 	// Optional per-build credentials.
 	Credentials *BuildCredentials `json:"credentials,omitempty"`
@@ -106,7 +109,15 @@ var deniedExtraVars = map[string]bool{
 	// Would delete the source image from Prism Central after the build --
 	// destructive when the source is a shared, pre-existing image.
 	"source_image_delete": true,
+	// FIPS is a form option and its sources are set by the administrator in
+	// the chart (fips.*), so users can't swap in non-FIPS packages. (In FIPS
+	// mode the template ignores containerd_version/kubernetes_container_registry
+	// in favour of the fips_* sources.)
+	"fips_enabled": true,
 }
+
+// deniedExtraVarPrefixes extends deniedExtraVars to whole families.
+var deniedExtraVarPrefixes = []string{"fips_"}
 
 // buildWrapper runs `make <target>` in its own process group and turns the
 // pod's SIGTERM (cancel / delete) into a SIGINT for the whole group -- the same
@@ -138,7 +149,16 @@ func (f fieldErrors) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-const defaultImageNameTemplate = "{prefix}{os}-release-{version}-{timestamp}.qcow2"
+const defaultImageNameTemplate = "{prefix}{os}{fips}-release-{version}-{timestamp}.qcow2"
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // reYearMonthOS turns "ubuntu-2404" into "ubuntu-24.04" for image names.
 var reYearMonthOS = regexp.MustCompile(`^(.+-)(\d{2})(\d{2})$`)
@@ -146,7 +166,7 @@ var reYearMonthOS = regexp.MustCompile(`^(.+-)(\d{2})(\d{2})$`)
 // now is replaced in tests.
 var now = time.Now
 
-func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, t time.Time) string {
+func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips bool, t time.Time) string {
 	tmpl := d.ImageNameTemplate
 	if tmpl == "" {
 		tmpl = defaultImageNameTemplate
@@ -160,6 +180,7 @@ func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, t time.Tim
 		"{os}", osName,
 		"{version}", strings.TrimPrefix(k8sVersion, "v"),
 		"{timestamp}", t.UTC().Format("20060102150405"),
+		"{fips}", map[bool]string{true: "-fips"}[fips],
 	).Replace(tmpl)
 }
 
@@ -210,7 +231,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		errs["kubernetesVersion"] = "must look like v1.36.1"
 	}
 	if r.ImageName == "" && ok && reK8sVersion.MatchString(r.KubernetesVersion) {
-		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, now())
+		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, r.FIPS, now())
 	}
 	if !reImageName.MatchString(r.ImageName) {
 		errs["imageName"] = "1-80 chars: letters, digits, '.', '_' or '-'"
@@ -244,6 +265,14 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 			errs["sourceImage"] = "invalid image name"
 		}
 	}
+	if r.FIPS {
+		switch {
+		case !cfg.FIPS.Enabled:
+			errs["fips"] = "FIPS builds are not enabled on this service"
+		case ok && !osOpt.FIPSCapable:
+			errs["fips"] = osOpt.Label + " does not support FIPS builds here; use RHEL 9 or Rocky Linux 9"
+		}
+	}
 	if r.SourceImageURL == "" && r.SourceImage == "" && ok && osOpt.RequiresImageURL {
 		errs["sourceImage"] = osOpt.Label + " has no default source image: give a URL or an existing Prism Central image"
 	}
@@ -266,7 +295,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 				switch {
 				case !reVarName.MatchString(k):
 					errs["extraVars"] = fmt.Sprintf("invalid variable name %q", k)
-				case deniedExtraVars[k]:
+				case deniedExtraVars[k] || hasAnyPrefix(k, deniedExtraVarPrefixes):
 					errs["extraVars"] = fmt.Sprintf("%q is managed by the form and cannot be overridden", k)
 				case len(v) > 4096 || strings.ContainsAny(v, "\x00\n\r"):
 					errs["extraVars"] = fmt.Sprintf("value for %q is invalid", k)
@@ -308,7 +337,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 // packerVars renders the var-file handed to the build via PACKER_VAR_FILES.
 // The Makefile places PACKER_VAR_FILES last on the packer command line, so
 // these values win over packer/config/*.json and packer/nutanix/<os>.json.
-func (r *BuildRequest) packerVars() map[string]string {
+func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	m := reK8sVersion.FindStringSubmatch(r.KubernetesVersion)
 	minor := m[1]
 	plain := strings.TrimPrefix(r.KubernetesVersion, "v")
@@ -348,6 +377,12 @@ func (r *BuildRequest) packerVars() map[string]string {
 	set("no_proxy", r.NoProxy)
 	set("extra_debs", r.ExtraDebs)
 	set("extra_rpms", r.ExtraRPMs)
+	if r.FIPS {
+		for k, v := range cfg.FIPS.packerVars(r.KubernetesVersion) {
+			vars[k] = v
+		}
+		vars["fips_enabled"] = "true"
+	}
 	return vars
 }
 
@@ -411,7 +446,7 @@ func buildObjects(cfg *Config, req *BuildRequest, id string) (*corev1.ConfigMap,
 		labelOS:        req.OS,
 	}
 
-	varsJSON, err := json.MarshalIndent(req.packerVars(), "", "  ")
+	varsJSON, err := json.MarshalIndent(req.packerVars(cfg), "", "  ")
 	if err != nil {
 		return nil, nil, nil, err
 	}

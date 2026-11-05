@@ -1,5 +1,44 @@
 command:
 {{ if ne .Vars.OS "windows" }} # Linux Only
+{{if eq (printf "%v" .Vars.fips_enabled) "true"}}
+  FIPS kernel mode:
+    exec: cat /proc/sys/crypto/fips_enabled
+    exit-status: 0
+    stdout: ["1"]
+    timeout: 0
+  FIPS on every boot entry:
+    exec: bash -c 'grubby --info=ALL | grep "^args=" | grep -vw "fips=1"'
+    exit-status: 1
+    stdout: []
+    timeout: 0
+  FIPS crypto policy:
+    exec: update-crypto-policies --show
+    exit-status: 0
+    stdout: ["FIPS"]
+    timeout: 0
+  FIPS dracut module in default initramfs:
+    exec: bash -c 'lsinitrd "/boot/initramfs-$(grubby --default-kernel | sed "s|.*/vmlinuz-||").img" -m | grep -qx fips'
+    exit-status: 0
+    timeout: 0
+  # Every binary that does TLS or handles keys must be built against a FIPS
+  # 140 validated module: BoringCrypto (GOEXPERIMENT=boringcrypto) or Go's
+  # native module (GOFIPS140); Go embeds its build settings in the binary.
+  # crictl (a debug client over containerd's unix socket) and the CNI plugins
+  # do no TLS and are standard builds even in the FIPS repos.
+  FIPS Go builds:
+    exec: >-
+      bash -c 'for b in /usr/bin/kubelet /usr/bin/kubeadm /usr/bin/kubectl
+      /usr/local/bin/containerd /usr/local/bin/containerd-shim-runc-v2 /usr/local/sbin/runc; do
+      LC_ALL=C grep -aqE "goexperiment\.boringcrypto|GOEXPERIMENT=[^[:space:]]*boringcrypto|GOFIPS140=v[0-9]" "$b" || echo "not a FIPS build: $b"; done'
+    exit-status: 0
+    stdout: ["!/not a FIPS build/"]
+    timeout: 0
+  FIPS Kubernetes release:
+    exec: kubelet --version
+    exit-status: 0
+    stdout: ["+{{ .Vars.kubernetes_build_metadata }}"]
+    timeout: 0
+{{end}}
 {{if eq .Vars.immutable_data_partition "true"}}
   test "$(blkid -s LABEL -o value "$(findmnt -n --target "{{.Vars.immutable_data_partition_mount}}" --output SOURCE)")" = "{{.Vars.immutable_data_partition_label}}" && test "$(findmnt -n --target "{{.Vars.immutable_data_partition_mount}}" --output FSTYPE)" = "{{.Vars.immutable_data_partition_fstype}}":
     exit-status: 0

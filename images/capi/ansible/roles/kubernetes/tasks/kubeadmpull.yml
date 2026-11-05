@@ -1,4 +1,35 @@
 ---
+# kubernetes_etcd_image_tag usually arrives as an extra var, which set_fact
+# cannot override, so the effective values live in kubeadm_* facts.
+- name: Set the Kubernetes version and etcd tag kubeadm pulls images for
+  ansible.builtin.set_fact:
+    kubeadm_kubernetes_version: >-
+      {{ kubernetes_semver + ('+' + kubernetes_build_metadata if kubernetes_build_metadata | length > 0 else '') }}
+    kubeadm_etcd_image_tag: "{{ kubernetes_etcd_image_tag }}"
+
+- name: Look up kubeadm's default etcd image
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      kubeadm config images list --kubernetes-version {{ kubeadm_kubernetes_version }}
+      --image-repository {{ kubernetes_container_registry }} | grep '/etcd:'
+    executable: /bin/bash
+  register: kubeadm_default_etcd_image
+  changed_when: false
+  when: kubeadm_etcd_image_tag | length == 0 and kubernetes_build_metadata | length > 0
+
+- name: Derive the etcd image tag from kubeadm's default and the build metadata
+  ansible.builtin.set_fact:
+    kubeadm_etcd_image_tag: >-
+      v{{ kubeadm_default_etcd_image.stdout.split(':')[-1] | regex_replace('-[0-9]+$', '') }}_{{ kubernetes_build_metadata }}
+  when: kubeadm_etcd_image_tag | length == 0 and kubernetes_build_metadata | length > 0
+
+- name: Show the FIPS etcd image  # its version is needed for `nkp create cluster --etcd-version`
+  ansible.builtin.debug:
+    msg: >-
+      FIPS etcd image: {{ kubernetes_etcd_image_repository | default('', true) or kubernetes_container_registry }}/etcd:{{ kubeadm_etcd_image_tag }}
+  when: kubernetes_build_metadata | length > 0
+
 - name: Create kubeadm config file
   ansible.builtin.template:
     dest: /etc/kubeadm.yml

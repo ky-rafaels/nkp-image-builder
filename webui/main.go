@@ -29,9 +29,10 @@ var webFS embed.FS
 var reBuildID = regexp.MustCompile(`^[0-9a-f]{8}$`)
 
 type server struct {
-	cfg    *Config
-	builds *Builds
-	log    *slog.Logger
+	cfg       *Config
+	builds    *Builds
+	log       *slog.Logger
+	fipsCheck fipsRepoChecker
 }
 
 func main() {
@@ -59,7 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	s := &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: log}
+	s := &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: log, fipsCheck: checkFIPSRepo}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -171,6 +172,14 @@ type configResponse struct {
 	Defaults      BuildDefaults `json:"defaults"`
 	Catalog       CatalogConfig `json:"catalog"`
 	Features      FeatureConfig `json:"features"`
+	FIPS          fipsInfo      `json:"fips"`
+}
+
+// fipsInfo is the part of FIPSConfig the UI needs; source URLs stay private.
+type fipsInfo struct {
+	Enabled         bool   `json:"enabled"`
+	BuildMetadata   string `json:"buildMetadata"`
+	ImageRepository string `json:"imageRepository"`
 }
 
 func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
@@ -181,6 +190,11 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		Defaults:      s.cfg.Defaults,
 		Catalog:       s.cfg.Catalog,
 		Features:      s.cfg.Features,
+		FIPS: fipsInfo{
+			Enabled:         s.cfg.FIPS.Enabled,
+			BuildMetadata:   s.cfg.FIPS.BuildMetadata(),
+			ImageRepository: s.cfg.FIPS.ImageRepository(),
+		},
 	})
 }
 
@@ -209,6 +223,10 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if fe := s.fipsPreflight(r.Context(), &req); fe != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation failed", fe)
 		return
 	}
 	b, err := s.builds.Create(r.Context(), &req)

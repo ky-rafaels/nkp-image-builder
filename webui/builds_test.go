@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,9 +28,11 @@ func testConfig() *Config {
 		Catalog: CatalogConfig{
 			OperatingSystems: []OSOption{
 				{ID: "ubuntu-2204", Label: "Ubuntu 22.04"},
-				{ID: "rhel-9", Label: "RHEL 9", RequiresImageURL: true, RequiresRHSM: true},
+				{ID: "rhel-9", Label: "RHEL 9", RequiresImageURL: true, RequiresRHSM: true, FIPSCapable: true},
+				{ID: "rockylinux-9", Label: "Rocky Linux 9", FIPSCapable: true},
 			},
 		},
+		FIPS:     FIPSConfig{Enabled: true},
 		Features: FeatureConfig{AllowCredentialOverride: true, AllowExtraVars: true},
 	}
 	cfg.applyDefaults()
@@ -59,13 +62,14 @@ func TestDefaultImageName(t *testing.T) {
 		o    OSOption
 		want string
 	}{
-		"ubuntu":   {d, OSOption{ID: "ubuntu-2404"}, "nkp-ubuntu-24.04-release-1.36.1-20260102030405.qcow2"},
-		"rocky":    {d, OSOption{ID: "rockylinux-9"}, "nkp-rockylinux-9-release-1.36.1-20260102030405.qcow2"},
-		"override": {d, OSOption{ID: "rhel-9", ImageNameOS: "rhel-9.6"}, "nkp-rhel-9.6-release-1.36.1-20260102030405.qcow2"},
-		"template": {BuildDefaults{ImageNameTemplate: "{os}-k8s-{version}"}, OSOption{ID: "flatcar"}, "flatcar-k8s-1.36.1"},
+		"ubuntu":    {d, OSOption{ID: "ubuntu-2404"}, "nkp-ubuntu-24.04-release-1.36.1-20260102030405.qcow2"},
+		"rocky":     {d, OSOption{ID: "rockylinux-9"}, "nkp-rockylinux-9-release-1.36.1-20260102030405.qcow2"},
+		"override":  {d, OSOption{ID: "rhel-9", ImageNameOS: "rhel-9.6"}, "nkp-rhel-9.6-release-1.36.1-20260102030405.qcow2"},
+		"template":  {BuildDefaults{ImageNameTemplate: "{os}-k8s-{version}"}, OSOption{ID: "flatcar"}, "flatcar-k8s-1.36.1"},
+		"no {fips}": {BuildDefaults{ImageNameTemplate: "{os}{fips}"}, OSOption{ID: "rhel-9"}, "rhel-9"},
 	}
 	for name, c := range cases {
-		if got := defaultImageName(c.d, c.o, "v1.36.1", ts); got != c.want {
+		if got := defaultImageName(c.d, c.o, "v1.36.1", false, ts); got != c.want {
 			t.Errorf("%s: got %q, want %q", name, got, c.want)
 		}
 	}
@@ -125,7 +129,7 @@ func TestPackerVars(t *testing.T) {
 	if err := r.normalize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	v := r.packerVars()
+	v := r.packerVars(cfg)
 	want := map[string]string{
 		"kubernetes_semver":      "v1.34.2",
 		"kubernetes_series":      "v1.34",
@@ -157,7 +161,7 @@ func TestSourceImageFromPrismCentral(t *testing.T) {
 	if err := byName.normalize(cfg); err != nil {
 		t.Fatalf("existing image should satisfy RHEL's source requirement: %v", err)
 	}
-	v := byName.packerVars()
+	v := byName.packerVars(cfg)
 	if v["source_image_name"] != "rhel-9.6-kvm-golden" || v["source_image_uuid"] != "" || v["image_url"] != "" {
 		t.Errorf("by name: %v", v)
 	}
@@ -166,9 +170,114 @@ func TestSourceImageFromPrismCentral(t *testing.T) {
 	if err := byUUID.normalize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	v = byUUID.packerVars()
+	v = byUUID.packerVars(cfg)
 	if v["source_image_uuid"] != "6f1c2b3a-1234-4abc-9def-0123456789ab" || v["source_image_name"] != "" {
 		t.Errorf("by uuid: %v", v)
+	}
+}
+
+func TestFIPS(t *testing.T) {
+	cfg := testConfig()
+	cfg.FIPS.ContainerdURL = "https://mirror.example.com/containerd-fips.tar.gz"
+	cfg.FIPS.ContainerdSHA256 = "abc123"
+
+	r := &BuildRequest{OS: "rockylinux-9", KubernetesVersion: "v1.36.1", FIPS: true}
+	if err := r.normalize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if r.ImageName != "nkp-rockylinux-9-fips-release-1.36.1-20261105193022.qcow2" {
+		t.Errorf("image name = %q", r.ImageName)
+	}
+	v := r.packerVars(cfg)
+	if v["fips_enabled"] != "true" || v["fips_containerd_url"] != cfg.FIPS.ContainerdURL ||
+		v["fips_containerd_sha256"] != "abc123" || v["crictl_version"] != "1.36.0" {
+		t.Errorf("fips vars: %v", v)
+	}
+	// Unset sources are left to the Packer template's defaults, except the
+	// RPM repo, which is always explicit so preflight and build agree.
+	if _, set := v["fips_kubernetes_container_registry"]; set {
+		t.Errorf("empty override should not be passed: %v", v)
+	}
+	if v["fips_kubernetes_rpm_repo"] != "https://packages.d2iq.com/konvoy/stable/linux/repos/el/kubernetes-v1.36.1-fips/x86_64" {
+		t.Errorf("default repo = %q", v["fips_kubernetes_rpm_repo"])
+	}
+	cfg.FIPS.KubernetesRPMRepo = "https://mirror.example.com/k8s-{version}-fips/"
+	if got := cfg.FIPS.RPMRepo("v1.35.0"); got != "https://mirror.example.com/k8s-v1.35.0-fips" {
+		t.Errorf("templated repo = %q", got)
+	}
+
+	plain := &BuildRequest{OS: "rockylinux-9", KubernetesVersion: "v1.36.1"}
+	if err := plain.normalize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for k := range plain.packerVars(cfg) {
+		if strings.HasPrefix(k, "fips_") {
+			t.Errorf("non-FIPS build got %s", k)
+		}
+	}
+
+	for name, c := range map[string]struct {
+		req BuildRequest
+		cfg func(*Config)
+	}{
+		"os not capable": {BuildRequest{OS: "ubuntu-2204", FIPS: true}, nil},
+		"disabled":       {BuildRequest{OS: "rockylinux-9", FIPS: true}, func(c *Config) { c.FIPS.Enabled = false }},
+	} {
+		cfg := testConfig()
+		if c.cfg != nil {
+			c.cfg(cfg)
+		}
+		err := c.req.normalize(cfg)
+		fe, ok := err.(fieldErrors)
+		if !ok || fe["fips"] == "" {
+			t.Errorf("%s: want fips error, got %v", name, err)
+		}
+	}
+
+	for _, k := range []string{"fips_enabled", "fips_kubernetes_rpm_repo", "fips_containerd_url"} {
+		r := &BuildRequest{OS: "rockylinux-9", ExtraVars: map[string]string{k: "x"}}
+		err := r.normalize(testConfig())
+		if fe, ok := err.(fieldErrors); !ok || fe["extraVars"] == "" {
+			t.Errorf("extra var %s should be rejected, got %v", k, err)
+		}
+	}
+}
+
+func TestFIPSPreflight(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/kubernetes-v1.36.1-fips/repodata/repomd.xml":
+			w.WriteHeader(http.StatusOK)
+		case "/kubernetes-v1.36.1-fips-broken/repodata/repomd.xml":
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			w.WriteHeader(http.StatusForbidden) // what S3 says for a missing key
+		}
+	}))
+	defer srv.Close()
+
+	s, _ := newTestServer(t)
+	s.fipsCheck = checkFIPSRepo
+	s.cfg.FIPS.Preflight = true
+	h := s.routes()
+	post := func(version, repo string) *httptest.ResponseRecorder {
+		s.cfg.FIPS.KubernetesRPMRepo = srv.URL + "/kubernetes-{version}-fips" + repo
+		body := fmt.Sprintf(`{"os":"rockylinux-9","kubernetesVersion":%q,"fips":true}`, version)
+		req := httptest.NewRequest("POST", "/api/builds", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post("v1.36.1", ""); rec.Code != http.StatusCreated {
+		t.Errorf("existing repo: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post("v1.34.2", ""); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "no FIPS Kubernetes packages for v1.34.2") {
+		t.Errorf("missing repo: %d %s", rec.Code, rec.Body)
+	}
+	// Inconclusive answers don't block the build.
+	if rec := post("v1.36.1", "-broken"); rec.Code != http.StatusCreated {
+		t.Errorf("inconclusive: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -250,7 +359,8 @@ func newTestServer(t *testing.T) (*server, *fake.Clientset) {
 	t.Helper()
 	cfg := testConfig()
 	client := fake.NewSimpleClientset()
-	return &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}, client
+	return &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		fipsCheck: func(context.Context, string) (bool, error) { return true, nil }}, client
 }
 
 func TestAPICreateListGetDelete(t *testing.T) {

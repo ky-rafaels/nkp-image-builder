@@ -1,0 +1,65 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Installs a FIPS containerd bundle: containerd, its shim and runc built
+# against a FIPS 140 validated crypto module, plus the matching
+# containerd.service. Unlike the upstream release archive, the bundle is laid
+# out relative to / (usr/local/bin, usr/local/sbin, etc/systemd/system), so it
+# replaces the separate upstream runc download as well.
+- name: Fail if no FIPS containerd bundle is configured
+  ansible.builtin.fail:
+    msg: fips_enabled is true but containerd_fips_url is empty.
+  when: containerd_fips_url | length == 0
+
+- name: Download FIPS containerd bundle
+  ansible.builtin.get_url:
+    url: "{{ containerd_fips_url }}"
+    checksum: "{{ ('sha256:' + containerd_fips_sha256) if containerd_fips_sha256 | length > 0 else omit }}"
+    dest: /tmp/containerd-fips.tar.gz
+    mode: "0600"
+  register: containerd_fips_download
+  until: containerd_fips_download is not failed
+  retries: 5
+  delay: 3
+
+- name: List FIPS containerd bundle
+  ansible.builtin.command: tar -tzf /tmp/containerd-fips.tar.gz
+  register: containerd_fips_contents
+  changed_when: false
+
+- name: Check FIPS containerd bundle layout
+  ansible.builtin.assert:
+    that:
+      - "'usr/local/bin/containerd' in containerd_fips_contents.stdout_lines"
+      - "'usr/local/sbin/runc' in containerd_fips_contents.stdout_lines"
+      - "'etc/systemd/system/containerd.service' in containerd_fips_contents.stdout_lines"
+      # Nothing outside usr/local and etc/systemd, since the bundle is unpacked at /.
+      - containerd_fips_contents.stdout_lines | reject('match', '^(\\./)?(etc/|etc/systemd/.*|usr/|usr/local/.*)$') | list | length == 0
+    fail_msg: >-
+      {{ containerd_fips_url }} does not look like a FIPS containerd bundle: expected only
+      usr/local/bin/containerd*, usr/local/sbin/runc and etc/systemd/system/containerd.service.
+
+- name: Unpack FIPS containerd bundle
+  ansible.builtin.unarchive:
+    remote_src: true
+    src: /tmp/containerd-fips.tar.gz
+    dest: /
+    extra_opts:
+      - --no-overwrite-dir
+      - --no-same-owner
+
+- name: Remove FIPS containerd bundle archive
+  ansible.builtin.file:
+    path: /tmp/containerd-fips.tar.gz
+    state: absent

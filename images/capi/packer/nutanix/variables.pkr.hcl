@@ -640,3 +640,60 @@ variable "ansible_user_vars" {
   type    = string
   default = ""
 }
+
+# --- FIPS 140 ---------------------------------------------------------------
+# With fips_enabled the build VM is switched to FIPS mode (kernel fips=1, FIPS
+# crypto policy) and rebooted before provisioning, and Kubernetes, crictl,
+# containerd and runc are installed from FIPS builds instead of the upstream
+# releases. The defaults point at the Nutanix/D2iQ FIPS builds that NKP's own
+# FIPS clusters use (BoringCrypto, FIPS 140 validated). EL9 only.
+variable "fips_enabled" {
+  type        = bool
+  description = "Build a FIPS 140 node image (EL9 only)."
+  default     = false
+}
+variable "fips_kubernetes_rpm_repo" {
+  type        = string
+  description = "Yum repo with FIPS kubelet/kubeadm/kubectl/cri-tools/kubernetes-cni. Empty uses the Nutanix/D2iQ repo for kubernetes_semver."
+  default     = ""
+}
+variable "fips_kubernetes_rpm_gpg_key" {
+  type        = string
+  description = "GPG key that signs fips_kubernetes_rpm_repo."
+  default     = "https://packages.d2iq.com/konvoy/stable/linux/repos/d2iq-sign-authority-gpg-public-key"
+}
+variable "fips_kubernetes_build_metadata" {
+  type        = string
+  description = "Semver build metadata of the FIPS Kubernetes release (v1.36.1+fips.0); image tags use it as v1.36.1_fips.0."
+  default     = "fips.0"
+}
+variable "fips_kubernetes_container_registry" {
+  type        = string
+  description = "Registry with the FIPS kube-apiserver/controller-manager/scheduler/proxy, etcd and pause images."
+  default     = "docker.io/mesosphere"
+}
+variable "fips_coredns_image_repository" {
+  type        = string
+  description = "CoreDNS is not rebuilt for FIPS; pre-pull it from here."
+  default     = "registry.k8s.io/coredns"
+}
+variable "fips_etcd_image_tag" {
+  type        = string
+  description = "FIPS etcd image tag to pre-pull. Empty uses kubeadm's default etcd version for this release with the build metadata appended (e.g. v3.6.8_fips.0)."
+  default     = ""
+}
+variable "fips_containerd_version" {
+  type        = string
+  description = "Version of the FIPS containerd bundle (used for goss checks and the default URL)."
+  default     = "2.3.1"
+}
+variable "fips_containerd_url" {
+  type        = string
+  description = "FIPS containerd + runc bundle laid out relative to / (usr/local/bin, usr/local/sbin, etc/systemd/system). Empty uses the Nutanix/D2iQ EL9 bundle for fips_containerd_version."
+  default     = ""
+}
+variable "fips_containerd_sha256" {
+  type        = string
+  description = "sha256 of fips_containerd_url. Required unless fips_containerd_url is your own mirror you trust without a checksum."
+  default     = "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020"
+}

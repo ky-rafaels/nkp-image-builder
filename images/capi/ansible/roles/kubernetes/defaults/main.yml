@@ -46,3 +46,19 @@ kubeadm_template: etc/kubeadm.yml
 kubelet_extra_args: ""
 
 kubernetes_enable_automatic_resource_sizing: false
+
+# FIPS 140: kubelet/kubeadm/kubectl come from kubernetes_rpm_repo (pointed at
+# a FIPS build repo by the caller), and so does crictl (cri-tools) instead of
+# the upstream GitHub release.
+fips_enabled: false
+# Build metadata of the Kubernetes release, e.g. "fips.0" for v1.36.1+fips.0.
+# kubeadm turns "+" into "_" for image tags (kube-apiserver:v1.36.1_fips.0).
+kubernetes_build_metadata: ""
+# Image repositories for pre-pulled images. Empty means derive from
+# kubernetes_container_registry the way kubeadm does.
+kubernetes_coredns_image_repository: ""
+kubernetes_etcd_image_repository: ""
+# etcd image tag. Empty means kubeadm's default for this Kubernetes version;
+# when kubernetes_build_metadata is set, that default with the same metadata
+# appended (3.6.8-0 -> v3.6.8_fips.0).
+kubernetes_etcd_image_tag: ""

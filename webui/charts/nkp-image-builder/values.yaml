@@ -83,8 +83,10 @@ defaults:
   #   {os}        catalog imageNameOS (derived from id: ubuntu-2404 -> ubuntu-24.04)
   #   {version}   Kubernetes version without the "v", e.g. 1.36.1
   #   {timestamp} UTC build start time, YYYYMMDDhhmmss
+  #   {fips}      "-fips" for FIPS builds, empty otherwise
   # e.g. nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2
-  imageNameTemplate: "{prefix}{os}-release-{version}-{timestamp}.qcow2"
+  #      nkp-rockylinux-9-fips-release-1.36.1-20261105143022.qcow2
+  imageNameTemplate: "{prefix}{os}{fips}-release-{version}-{timestamp}.qcow2"
   httpProxy: ""
   httpsProxy: ""
   noProxy: ""
@@ -92,6 +94,7 @@ defaults:
 # -- What users can pick from. `id` must match packer/nutanix/<id>.json and the
 # `build-nutanix-<id>` make target in images/capi/Makefile. Optional
 # `imageNameOS` overrides the {os} part of the default image name.
+# `fipsCapable` offers the FIPS 140 option for that OS (EL9 only, see `fips`).
 catalog:
   operatingSystems:
     - id: ubuntu-2204
@@ -102,10 +105,12 @@ catalog:
       label: Ubuntu 26.04
     - id: rockylinux-9
       label: Rocky Linux 9
+      fipsCapable: true
     - id: rhel-9
       label: RHEL 9
       requiresImageURL: true
       requiresRHSM: true
+      fipsCapable: true
     - id: flatcar
       label: Flatcar
       # packer/nutanix/flatcar.json names a local file, not a URL.
@@ -116,6 +121,43 @@ catalog:
     - v1.36.1
     - v1.35.0
     - v1.34.2
+
+# -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
+# fips=1, FIPS crypto policy, dracut fips module) before provisioning and
+# installs Kubernetes, containerd and runc built with BoringCrypto (a FIPS 140
+# validated module), then goss verifies all of it. EL9 only (RHEL 9, Rocky 9).
+# Use the result with the matching FIPS control plane:
+#   nkp create cluster nutanix --kubernetes-version v1.36.1+fips.0 \
+#     --kubernetes-image-repository docker.io/mesosphere ...
+fips:
+  enabled: true
+  # Before starting a FIPS build, check the RPM repo has packages for the
+  # requested Kubernetes version (from the web UI pod; network errors don't
+  # block the build). Not every upstream patch release has a FIPS build.
+  preflight: true
+  # Sources. Empty uses the Nutanix/D2iQ FIPS builds NKP itself uses; point
+  # these at mirrors for air-gapped sites.
+  # Yum repo with FIPS kubelet/kubeadm/kubectl/cri-tools/kubernetes-cni.
+  # {version} becomes e.g. v1.36.1.
+  # Default: https://packages.d2iq.com/konvoy/stable/linux/repos/el/kubernetes-{version}-fips/x86_64
+  kubernetesRpmRepo: ""
+  # Default: https://packages.d2iq.com/konvoy/stable/linux/repos/d2iq-sign-authority-gpg-public-key
+  kubernetesRpmGpgKey: ""
+  # Build metadata of FIPS releases (v1.36.1+fips.0 -> image tag v1.36.1_fips.0). Default: fips.0
+  kubernetesBuildMetadata: ""
+  # Registry with FIPS kube-*, etcd and pause images. Default: docker.io/mesosphere
+  kubernetesImageRepository: ""
+  # CoreDNS isn't rebuilt for FIPS. Default: registry.k8s.io/coredns
+  corednsImageRepository: ""
+  # FIPS etcd tag to pre-pull. Default: kubeadm's etcd version + metadata (e.g. v3.6.8_fips.0).
+  etcdImageTag: ""
+  # containerd + runc bundle, laid out relative to / (usr/local/bin,
+  # usr/local/sbin, etc/systemd/system). If you change the version or URL,
+  # set containerdSHA256 to match.
+  # Default URL: https://packages.d2iq.com/dkp/containerd/containerd-<version>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz
+  containerdVersion: ""   # default 2.3.1
+  containerdURL: ""
+  containerdSHA256: ""    # default: sha256 of the 2.3.1 bundle
 
 features:
   # Let users enter their own Prism Central / RHSM credentials per build.

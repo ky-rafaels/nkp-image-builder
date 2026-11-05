@@ -31,3 +31,12 @@ containerd_service_template_versions:
 containerd_runc_url: "https://github.com/opencontainers/runc/releases/download/v{{ runc_version }}/runc.{{ arch }}"
 runc_version: "1.4.3"
 containerd_runc_checksum_url: "https://github.com/opencontainers/runc/releases/download/v{{ runc_version }}/runc.sha256sum"
+
+# FIPS 140: install a containerd + runc bundle built against a validated
+# crypto module (e.g. the Nutanix/D2iQ BoringCrypto builds) instead of the
+# upstream release. The archive is unpacked at / and must contain
+# usr/local/bin/containerd*, usr/local/sbin/runc and
+# etc/systemd/system/containerd.service.
+fips_enabled: false
+containerd_fips_url: ""
+containerd_fips_sha256: ""

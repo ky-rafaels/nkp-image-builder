@@ -184,7 +184,19 @@ input.invalid, textarea.invalid { border-color: var(--danger); }
 }
 .os-card input { position: absolute; opacity: 0; pointer-events: none; }
 .os-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-.os-name { font-weight: 500; }
+.os-name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
+  background: var(--ok-soft); color: var(--ok);
+  vertical-align: middle;
+}
+td .tag { margin-left: 8px; }
+.fips-option { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.fips-option .check { margin-bottom: 0; }
+.check:has(input:disabled) { color: var(--muted); }
 .os-id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
 
 details.advanced {

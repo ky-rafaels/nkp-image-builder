@@ -81,9 +81,11 @@ async function loadConfig() {
   osWrap.replaceChildren(...cfg.catalog.operatingSystems.map((o, i) =>
     el("label", { class: "os-card" },
       el("input", { type: "radio", name: "os", value: o.id, checked: i === 0 }),
-      el("span", { class: "os-name" }, o.label),
+      el("span", { class: "os-name" }, o.label,
+        cfg.fips.enabled && o.fipsCapable ? el("span", { class: "tag", title: "FIPS 140 capable" }, "FIPS") : null),
       el("span", { class: "os-id" }, o.id),
     )));
+  $("#fips-option").classList.toggle("hidden", !cfg.fips.enabled);
 
   $("#k8s-versions").replaceChildren(...cfg.catalog.kubernetesVersions.map((v) => el("option", { value: v })));
 
@@ -113,12 +115,19 @@ function onFormChange() {
   const f = $("#build-form");
   const os = selectedOS();
   if (!os) return;
+  const fipsBox = f.fips;
+  fipsBox.disabled = !os.fipsCapable;
+  if (!os.fipsCapable) fipsBox.checked = false;
+  $("#fips-hint").textContent = os.fipsCapable
+    ? "FIPS kernel mode and crypto policy, with FIPS builds of Kubernetes, containerd and runc."
+    : `Not available for ${os.label}. FIPS builds are supported on RHEL 9 and Rocky Linux 9.`;
   const d = state.config.defaults;
   const version = f.kubernetesVersion.value.trim().replace(/^v/, "") || "…";
   $("#image-name-default").textContent = (d.imageNameTemplate || "")
     .replaceAll("{prefix}", d.imageNamePrefix || "")
     .replaceAll("{os}", os.imageNameOS || os.id)
     .replaceAll("{version}", version)
+    .replaceAll("{fips}", fipsSelected() ? "-fips" : "")
     .replaceAll("{timestamp}", "<timestamp>");
   $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
   // OSes without a usable default image must pick a Prism image or a URL.
@@ -132,6 +141,11 @@ function onFormChange() {
   const mode = sourceMode();
   $$("[data-source-mode]").forEach((n) => n.classList.toggle("hidden", n.dataset.sourceMode !== mode));
   $("#rhsm-fields").classList.toggle("hidden", !os.requiresRHSM);
+}
+
+function fipsSelected() {
+  const os = selectedOS();
+  return Boolean(state.config.fips.enabled && os?.fipsCapable && $("#build-form").fips.checked);
 }
 
 function sourceMode() {
@@ -170,6 +184,7 @@ function collectRequest() {
     extraDebs: f.extraDebs.value,
     extraRpms: f.extraRpms.value,
   };
+  if (fipsSelected()) req.fips = true;
   if (state.config.features.allowExtraVars) {
     const vars = parseExtraVars(f.extraVars.value);
     if (Object.keys(vars).length) req.extraVars = vars;
@@ -258,7 +273,7 @@ async function refreshBuilds() {
                onclick: () => openDetail(b.id),
                onkeydown: (e) => { if (e.key === "Enter") openDetail(b.id); } },
       el("td", {}, statusPill(b.phase)),
-      el("td", { class: "mono" }, b.imageName),
+      el("td", { class: "mono" }, b.imageName, b.request?.fips ? el("span", { class: "tag" }, "FIPS") : null),
       el("td", {}, osLabel(b.os)),
       el("td", { class: "mono" }, b.request?.kubernetesVersion || "—"),
       el("td", {}, fmtTime(b.startedAt || b.createdAt)),
@@ -277,6 +292,7 @@ function renderDetailHeader(b) {
   const r = b.request || {};
   const rows = [
     ["Kubernetes", r.kubernetesVersion],
+    ["FIPS 140", r.fips ? "Yes" : null],
     ["Cluster", r.clusterName],
     ["Subnet", r.subnetName],
     ["VM size", r.cpus ? `${r.cpus} vCPU · ${r.memoryMB} MB · ${r.diskSizeGB} GB` : null],
@@ -292,8 +308,20 @@ function renderDetailHeader(b) {
   cancel.textContent = done ? "Delete record" : "Cancel build";
   cancel.disabled = b.phase === "Cancelling";
   $("#detail-next").classList.toggle("hidden", b.phase !== "Succeeded");
+  const k8s = (r.kubernetesVersion || "").replace(/^v/, "");
+  const fips = state.config.fips;
+  const lines = r.fips
+    ? [
+        `--vm-image ${b.imageName}`,
+        `--kubernetes-version v${k8s}+${fips.buildMetadata}`,
+        `--kubernetes-image-repository ${fips.imageRepository}`,
+        `--etcd-version <etcd-version>+${fips.buildMetadata}`,
+        `--etcd-image-repository ${fips.imageRepository}`,
+      ]
+    : [`--vm-image ${b.imageName}`, `--kubernetes-version ${k8s}`];
   $("#detail-next-cmd").textContent =
-    `nkp create cluster nutanix \\\n  --vm-image ${b.imageName} \\\n  --kubernetes-version ${(r.kubernetesVersion || "").replace(/^v/, "")} \\\n  …`;
+    ["nkp create cluster nutanix", ...lines.map((l) => `  ${l}`), "  …"].join(" \\\n") +
+    (r.fips ? '\n\n# <etcd-version>: the etcd version from the "FIPS etcd image"\n# line in the build log, e.g. 3.6.8' : "");
 }
 
 async function openDetail(id) {

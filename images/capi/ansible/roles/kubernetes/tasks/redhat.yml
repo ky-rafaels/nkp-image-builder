@@ -35,8 +35,12 @@
     disable_excludes: "kubernetes"
     disable_plugin: "priorities"
   vars:
-    packages:
-      - kubelet-{{ kubernetes_rpm_version }}
-      - kubeadm-{{ kubernetes_rpm_version }}
-      - kubectl-{{ kubernetes_rpm_version }}
-      - kubernetes-cni{{ '-' + kubernetes_cni_rpm_version if kubernetes_cni_rpm_version else '' }}
+    # In FIPS mode crictl comes from the same signed repo as the rest of
+    # Kubernetes instead of a GitHub download (crictl-url.yml is skipped).
+    packages: >-
+      {{ [
+        'kubelet-' + kubernetes_rpm_version,
+        'kubeadm-' + kubernetes_rpm_version,
+        'kubectl-' + kubernetes_rpm_version,
+        'kubernetes-cni' + ('-' + kubernetes_cni_rpm_version if kubernetes_cni_rpm_version else ''),
+      ] + (['cri-tools-' + crictl_version] if fips_enabled | bool else []) }}

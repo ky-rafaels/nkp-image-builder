@@ -20,6 +20,34 @@ build {
     script          = "./packer/files/flatcar/scripts/bootstrap-flatcar.sh"
   }
 
+  # FIPS: switch the VM to FIPS mode and reboot into it before provisioning,
+  # so everything below (including goss) runs on the FIPS kernel. All three
+  # steps are no-ops when fips_enabled is false.
+  provisioner "shell" {
+    environment_vars = [
+      "FIPS_ENABLED=${var.fips_enabled}",
+      "http_proxy=${var.http_proxy}",
+      "https_proxy=${var.https_proxy}",
+      "no_proxy=${var.no_proxy}",
+    ]
+    execute_command = "sudo {{.Vars}} -S -E bash '{{.Path}}'"
+    script          = "./packer/files/fips/enable-fips.sh"
+  }
+
+  provisioner "shell" {
+    execute_command   = var.fips_enabled ? "sudo systemctl reboot" : "true"
+    inline            = ["true"]
+    expect_disconnect = true
+  }
+
+  provisioner "shell" {
+    environment_vars    = ["FIPS_ENABLED=${var.fips_enabled}"]
+    execute_command     = "sudo {{.Vars}} -S -E bash '{{.Path}}'"
+    pause_before        = var.fips_enabled ? "30s" : "0s"
+    start_retry_timeout = "15m"
+    script              = "./packer/files/fips/verify-fips.sh"
+  }
+
   provisioner "ansible" {
     ansible_env_vars = [
       "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args} -o IdentitiesOnly=yes'"
@@ -53,7 +81,9 @@ build {
       containerd_gvisor_runtime              = var.containerd_gvisor_runtime
       containerd_gvisor_version              = var.containerd_gvisor_version
       containerd_image_pull_progress_timeout = (var.containerd_image_pull_progress_timeout != null ? var.containerd_image_pull_progress_timeout : "")
-      containerd_version                     = var.containerd_version
+      containerd_version                     = local.containerd_version
+      fips_enabled                           = var.fips_enabled
+      kubernetes_build_metadata              = local.kubernetes_build_metadata
       kubernetes_cni_deb_version             = (var.kubernetes_cni_deb_version != null ? var.kubernetes_cni_deb_version : "")
       kubernetes_cni_rpm_version             = split("-", var.kubernetes_cni_rpm_version != null ? var.kubernetes_cni_rpm_version : "")[0]
       kubernetes_cni_source_type             = var.kubernetes_cni_source_type

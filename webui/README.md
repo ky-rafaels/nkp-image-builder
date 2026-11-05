@@ -42,11 +42,56 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
 | Source image: Prism Central image | `source_image_uuid` if the value is a UUID, otherwise `source_image_name`. The build boots from that existing image and never modifies or deletes it. |
 | Source image: download URL | `image_url` |
+| FIPS 140 mode (RHEL 9, Rocky 9) | `fips_enabled=true` plus the `fips.*` sources from the chart. See [FIPS images](#fips-images). |
 | Proxies, extra packages | `http_proxy`, `https_proxy`, `no_proxy`, `extra_debs`, `extra_rpms` |
 | Extra variables | any other variable in `packer/nutanix/variables.pkr.hcl` except credentials, SSH, naming and custom ansible/post-processor hooks |
 | Credential override | per-build Secret: `NUTANIX_ENDPOINT/PORT/INSECURE/USERNAME/PASSWORD`, `RHSM_USER/PASS` |
 
 The rendered var-file is shown in each build's detail view.
+
+## FIPS images
+
+Ticking **FIPS 140 mode** (offered for OSes with `fipsCapable: true`, by
+default RHEL 9 and Rocky Linux 9) builds an image that boots in FIPS mode and
+runs only FIPS-validated crypto on the Kubernetes path:
+
+* **Kernel and OS.** Before provisioning, the build runs `fips-mode-setup
+  --enable` (`fips=1` on every kernel command line, the dracut `fips` module,
+  and the system-wide `FIPS` crypto policy for OpenSSL, GnuTLS, NSS and
+  OpenSSH). It then reboots, so the rest of the build runs on the FIPS kernel.
+* **Kubernetes.** kubelet, kubeadm, kubectl, cri-tools and kubernetes-cni come
+  from the Nutanix/D2iQ FIPS RPM repo (GPG-checked). These are the same
+  BoringCrypto builds NKP's FIPS clusters use. The `kube-*`, etcd and pause
+  images are pre-pulled as `docker.io/mesosphere/*:vX.Y.Z_fips.0`.
+* **Runtime.** containerd, its shim and runc come from the FIPS containerd
+  bundle (BoringCrypto), pinned by sha256.
+* **Verification.** goss fails the build unless:
+  * `/proc/sys/crypto/fips_enabled` is 1
+  * every boot entry has `fips=1`
+  * the crypto policy is FIPS
+  * the initramfs has the fips module
+  * kubelet, kubeadm, kubectl, containerd, the shim and runc are all FIPS
+    (BoringCrypto/GOFIPS140) builds
+* **Naming.** Default image names gain `-fips`, e.g.
+  `nkp-rockylinux-9-fips-release-1.36.1-<timestamp>.qcow2`.
+
+Not every Kubernetes patch release has a FIPS build. Before a build starts, the
+service checks that the FIPS repo has the requested version, and rejects it
+otherwise (`fips.preflight`). Create clusters from the image with the FIPS
+control plane. The build log prints the etcd version under "FIPS etcd image":
+
+```sh
+nkp create cluster nutanix --vm-image nkp-rockylinux-9-fips-release-1.36.1-… \
+  --kubernetes-version v1.36.1+fips.0 --kubernetes-image-repository docker.io/mesosphere \
+  --etcd-version 3.6.8+fips.0 --etcd-image-repository docker.io/mesosphere …
+```
+
+For air-gapped sites, point the `fips.*` values at mirrors.
+`fips.kubernetesRpmRepo` may contain `{version}`. Users can't override FIPS
+sources through extra variables.
+
+Ubuntu FIPS isn't offered. It needs an Ubuntu Pro token for the FIPS kernel,
+and there is no FIPS-built Kubernetes `.deb` source to install from.
 
 ## Prerequisites
 
