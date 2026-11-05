@@ -1,7 +1,7 @@
 # -- Web UI image (built from webui/Dockerfile)
 image:
-  repository: registry.example.com/nkp/nkp-image-builder-webui
-  tag: ""          # defaults to .Chart.AppVersion
+  repository: 10.38.48.51:5000/library/nkp-image-build/nkp-image-builder-webui
+  tag: "v0.1.0"          # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -12,8 +12,8 @@ builder:
   # Image built from images/capi/Dockerfile in this repo (packer, ansible and
   # the Nutanix packer plugin preinstalled). `make -C webui image-builder`.
   image:
-    repository: registry.example.com/nkp/nkp-image-builder
-    tag: ""        # defaults to .Chart.AppVersion
+    repository: 10.38.48.51:5000/library/nkp-image-build/nkp-image-builder 
+    tag: "v0.1.0"        # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   # Pull secrets for the builder image (names of existing Secrets).
   imagePullSecrets: []
@@ -70,8 +70,8 @@ nutanix:
 
 # -- Form defaults shown in the UI.
 defaults:
-  clusterName: ""        # Prism Element cluster to build on
-  subnetName: ""         # subnet for the build VM; must be reachable via SSH from build pods
+  clusterName: "SA-GPU"        # Prism Element cluster to build on
+  subnetName: "primary"         # subnet for the build VM; must be reachable via SSH from build pods
   kubernetesVersion: v1.36.1
   cpus: 2
   memoryMB: 4096
@@ -121,12 +121,12 @@ auth:
   basic:
     enabled: false
     username: admin
-    password: ""
+    password: "nutanix/4u"
     existingSecret: ""   # keys: username, password
 
 serviceAccount:
   create: true
-  name: ""
+  name: "nkp-image-builder-sa"
   annotations: {}
 
 podAnnotations: {}
@@ -155,14 +155,14 @@ service:
   port: 80
 
 ingress:
-  enabled: false
-  className: ""
+  enabled: true
+  className: "kommander-traefik"
   annotations: {}
     # Log streams for long builds need long-lived connections:
     # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     # nginx.ingress.kubernetes.io/proxy-buffering: "off"
   hosts:
-    - host: nkp-image-builder.example.com
+    - host: nkp-image-builder.10.38.48.51.nip.io
       paths:
         - path: /
           pathType: Prefix
