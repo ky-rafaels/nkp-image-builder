@@ -1,0 +1,68 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nkpib.serviceAccountName" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+# Identity for build pods. It gets no RBAC and no mounted token; it exists so
+# builds don't run as the namespace's default ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nkpib.builderServiceAccountName" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- with .Values.builder.imagePullSecrets }}
+imagePullSecrets:
+  {{- range . }}
+  - name: {{ . }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nkpib.fullname" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "update", "delete"]
+  # Per-build credential overrides only. No get/list: the UI never reads
+  # Secrets back, including the shared Prism Central credentials.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nkpib.fullname" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "nkpib.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nkpib.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

@@ -1,0 +1,4 @@
+charts/
+hack/
+*.md
+Makefile

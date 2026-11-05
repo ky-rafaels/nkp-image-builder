@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NKP Image Builder</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◆</span>
+      <div>
+        <h1>NKP Image Builder</h1>
+        <p class="sub">Build Kubernetes node images on Nutanix AHV and publish them to Prism Central</p>
+      </div>
+    </div>
+    <dl class="env" id="env"></dl>
+  </header>
+
+  <main class="layout">
+    <section class="panel" aria-labelledby="new-build-title">
+      <h2 id="new-build-title">New build</h2>
+      <form id="build-form" novalidate>
+        <fieldset>
+          <legend>Operating system</legend>
+          <div class="os-grid" id="os-options" role="radiogroup"></div>
+          <p class="field-error" data-error-for="os"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Kubernetes</legend>
+          <div class="row">
+            <label class="field">
+              <span>Kubernetes version</span>
+              <input name="kubernetesVersion" list="k8s-versions" placeholder="v1.36.1" autocomplete="off" required>
+              <datalist id="k8s-versions"></datalist>
+              <small class="field-error" data-error-for="kubernetesVersion"></small>
+            </label>
+            <label class="field grow">
+              <span>Image name in Prism Central</span>
+              <input name="imageName" autocomplete="off" spellcheck="false">
+              <small class="hint">Leave blank for <code id="image-name-default"></code></small>
+              <small class="field-error" data-error-for="imageName"></small>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Nutanix placement</legend>
+          <div class="row">
+            <label class="field grow">
+              <span>Prism Element cluster</span>
+              <input name="clusterName" autocomplete="off" required>
+              <small class="field-error" data-error-for="clusterName"></small>
+            </label>
+            <label class="field grow">
+              <span>Subnet</span>
+              <input name="subnetName" autocomplete="off" required>
+              <small class="hint">Must be reachable over SSH from the build pod</small>
+              <small class="field-error" data-error-for="subnetName"></small>
+            </label>
+          </div>
+          <div class="row">
+            <label class="field">
+              <span>vCPUs</span>
+              <input name="cpus" type="number" min="1" max="64">
+              <small class="field-error" data-error-for="cpus"></small>
+            </label>
+            <label class="field">
+              <span>Memory (MB)</span>
+              <input name="memoryMB" type="number" min="1024" step="1024">
+              <small class="field-error" data-error-for="memoryMB"></small>
+            </label>
+            <label class="field">
+              <span>Disk (GB)</span>
+              <input name="diskSizeGB" type="number" min="10">
+              <small class="field-error" data-error-for="diskSizeGB"></small>
+            </label>
+          </div>
+          <label class="field" id="source-image-field">
+            <span>Source image URL <em id="source-image-required" class="req hidden">required</em></span>
+            <input name="sourceImageURL" type="url" placeholder="https://…/image.qcow2" spellcheck="false">
+            <small class="hint" id="source-image-hint"></small>
+            <small class="field-error" data-error-for="sourceImageURL"></small>
+          </label>
+        </fieldset>
+
+        <details class="advanced" id="credentials-section">
+          <summary>Prism Central credentials <span class="muted">(optional override)</span></summary>
+          <p class="hint">Leave blank to use the credentials configured for this service. Values are stored only in a per-build Secret deleted with the build.</p>
+          <div class="row">
+            <label class="field grow">
+              <span>Endpoint</span>
+              <input name="cred.endpoint" autocomplete="off" placeholder="prism-central.example.com" spellcheck="false">
+              <small class="field-error" data-error-for="credentials.endpoint"></small>
+            </label>
+            <label class="field">
+              <span>Port</span>
+              <input name="cred.port" inputmode="numeric" placeholder="9440">
+              <small class="field-error" data-error-for="credentials.port"></small>
+            </label>
+          </div>
+          <div class="row">
+            <label class="field grow">
+              <span>Username</span>
+              <input name="cred.username" autocomplete="off">
+            </label>
+            <label class="field grow">
+              <span>Password</span>
+              <input name="cred.password" type="password" autocomplete="new-password">
+              <small class="field-error" data-error-for="credentials.password"></small>
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" name="cred.insecure"> Skip TLS verification</label>
+          <div class="row" id="rhsm-fields">
+            <label class="field grow">
+              <span>RHSM username</span>
+              <input name="cred.rhsmUser" autocomplete="off">
+            </label>
+            <label class="field grow">
+              <span>RHSM password</span>
+              <input name="cred.rhsmPass" type="password" autocomplete="new-password">
+              <small class="field-error" data-error-for="credentials.rhsmPass"></small>
+            </label>
+          </div>
+          <p class="field-error" data-error-for="credentials"></p>
+        </details>
+
+        <details class="advanced">
+          <summary>Advanced</summary>
+          <div class="row">
+            <label class="field grow">
+              <span>HTTP proxy</span>
+              <input name="httpProxy" spellcheck="false">
+              <small class="field-error" data-error-for="httpProxy"></small>
+            </label>
+            <label class="field grow">
+              <span>HTTPS proxy</span>
+              <input name="httpsProxy" spellcheck="false">
+              <small class="field-error" data-error-for="httpsProxy"></small>
+            </label>
+          </div>
+          <label class="field">
+            <span>No proxy</span>
+            <input name="noProxy" spellcheck="false">
+            <small class="field-error" data-error-for="noProxy"></small>
+          </label>
+          <div class="row">
+            <label class="field grow">
+              <span>Extra .deb packages</span>
+              <input name="extraDebs" placeholder="nfs-common open-iscsi" spellcheck="false">
+              <small class="field-error" data-error-for="extraDebs"></small>
+            </label>
+            <label class="field grow">
+              <span>Extra RPM packages</span>
+              <input name="extraRpms" placeholder="nfs-utils iscsi-initiator-utils" spellcheck="false">
+              <small class="field-error" data-error-for="extraRpms"></small>
+            </label>
+          </div>
+          <label class="field" id="extra-vars-field">
+            <span>Extra Packer variables</span>
+            <textarea name="extraVars" rows="4" spellcheck="false" placeholder="containerd_version=2.1.4&#10;kubernetes_container_registry=registry.example.com"></textarea>
+            <small class="hint">One <code>name=value</code> per line. Passed straight to <code>packer/nutanix</code>.</small>
+            <small class="field-error" data-error-for="extraVars"></small>
+          </label>
+        </details>
+
+        <div class="actions">
+          <p class="form-error" id="form-error" role="alert"></p>
+          <button type="submit" class="primary" id="submit">Start build</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel builds" aria-labelledby="builds-title">
+      <div class="panel-head">
+        <h2 id="builds-title">Builds</h2>
+        <button type="button" class="ghost" id="refresh">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Status</th><th>Image</th><th>OS</th><th>Kubernetes</th><th>Started</th><th>Duration</th></tr>
+          </thead>
+          <tbody id="builds-body"></tbody>
+        </table>
+        <p class="empty hidden" id="builds-empty">No builds yet. Fill in the form to start one.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="detail" aria-labelledby="detail-title">
+    <div class="detail-head">
+      <div>
+        <h2 id="detail-title"></h2>
+        <p class="muted" id="detail-sub"></p>
+      </div>
+      <div class="detail-actions">
+        <button type="button" class="danger" id="detail-cancel">Cancel build</button>
+        <button type="button" class="ghost" id="detail-close" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <div class="detail-body">
+      <div class="detail-meta">
+        <dl id="detail-meta"></dl>
+        <details>
+          <summary>Rendered Packer var-file</summary>
+          <pre id="detail-vars" class="code"></pre>
+        </details>
+        <div id="detail-next" class="next hidden">
+          <h3>Use it in NKP</h3>
+          <pre class="code" id="detail-next-cmd"></pre>
+        </div>
+      </div>
+      <div class="log-wrap">
+        <div class="log-head">
+          <span>Build log</span>
+          <label class="check"><input type="checkbox" id="autoscroll" checked> Follow</label>
+        </div>
+        <pre id="log" class="log" tabindex="0"></pre>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

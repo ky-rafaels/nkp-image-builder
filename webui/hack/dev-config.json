@@ -1,0 +1,16 @@
+{
+  "namespace": "nkp-image-builder",
+  "builder": {"image": "localhost:5000/nkp-image-builder:dev", "ttlSecondsAfterFinished": 86400},
+  "nutanix": {"credentialsSecret": "nkp-image-builder-nutanix", "endpoint": "prism-central.example.com"},
+  "defaults": {"clusterName": "", "subnetName": "", "kubernetesVersion": "v1.36.1", "imageNamePrefix": "nkp-"},
+  "catalog": {
+    "operatingSystems": [
+      {"id": "ubuntu-2204", "label": "Ubuntu 22.04"},
+      {"id": "ubuntu-2404", "label": "Ubuntu 24.04"},
+      {"id": "rockylinux-9", "label": "Rocky Linux 9"},
+      {"id": "rhel-9", "label": "RHEL 9", "requiresImageURL": true, "requiresRHSM": true}
+    ],
+    "kubernetesVersions": ["v1.36.1", "v1.35.0", "v1.34.2"]
+  },
+  "features": {"allowCredentialOverride": true, "allowExtraVars": true}
+}

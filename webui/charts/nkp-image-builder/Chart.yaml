@@ -1,0 +1,13 @@
+apiVersion: v2
+name: nkp-image-builder
+description: Web UI for building Kubernetes node images on Nutanix AHV (for NKP) with kubernetes-sigs/image-builder
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - nutanix
+  - nkp
+  - image-builder
+  - packer
+sources:
+  - https://github.com/kubernetes-sigs/image-builder

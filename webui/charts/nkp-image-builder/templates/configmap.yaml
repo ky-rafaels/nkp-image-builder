@@ -1,0 +1,33 @@
+{{- $builderImage := printf "%s:%s" .Values.builder.image.repository (default .Chart.AppVersion .Values.builder.image.tag) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nkpib.fullname" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+data:
+  config.json: |-
+    {{- $cfg := dict
+      "namespace" .Release.Namespace
+      "builder" (dict
+        "image" $builderImage
+        "imagePullPolicy" .Values.builder.image.pullPolicy
+        "imagePullSecrets" .Values.builder.imagePullSecrets
+        "serviceAccountName" (include "nkpib.builderServiceAccountName" .)
+        "resources" .Values.builder.resources
+        "nodeSelector" .Values.builder.nodeSelector
+        "tolerations" .Values.builder.tolerations
+        "extraEnv" .Values.builder.extraEnv
+        "ttlSecondsAfterFinished" .Values.builder.ttlSecondsAfterFinished
+        "activeDeadlineSeconds" .Values.builder.activeDeadlineSeconds
+        "terminationGracePeriodSeconds" .Values.builder.terminationGracePeriodSeconds
+        "podSecurityContext" .Values.builder.podSecurityContext
+        "securityContext" .Values.builder.securityContext)
+      "nutanix" (dict
+        "credentialsSecret" (include "nkpib.nutanixSecretName" .)
+        "endpoint" .Values.nutanix.credentials.endpoint)
+      "defaults" .Values.defaults
+      "catalog" .Values.catalog
+      "features" .Values.features
+    }}
+    {{- $cfg | toPrettyJson | nindent 4 }}

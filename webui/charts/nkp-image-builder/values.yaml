@@ -1,0 +1,173 @@
+# -- Web UI image (built from webui/Dockerfile)
+image:
+  repository: registry.example.com/nkp/nkp-image-builder-webui
+  tag: ""          # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+replicaCount: 1
+
+# -- Settings for the build Jobs the UI launches.
+builder:
+  # Image built from images/capi/Dockerfile in this repo (packer, ansible and
+  # the Nutanix packer plugin preinstalled). `make -C webui image-builder`.
+  image:
+    repository: registry.example.com/nkp/nkp-image-builder
+    tag: ""        # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # Pull secrets for the builder image (names of existing Secrets).
+  imagePullSecrets: []
+  # Packer only talks to Prism Central and SSHes to the build VM; it needs
+  # little CPU. Ansible + goss output can be chatty, so give memory headroom.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  # Extra env for every build, e.g. proxies for reaching Prism Central or
+  # pkgs.k8s.io from the build pod itself.
+  extraEnv: []
+  #  - name: HTTPS_PROXY
+  #    value: http://proxy.example.com:3128
+  # Delete finished build Jobs (and their logs) after this many seconds.
+  ttlSecondsAfterFinished: 604800   # 7 days
+  # Hard limit for a single build.
+  activeDeadlineSeconds: 14400      # 4 hours
+  # Time given to Packer to delete the build VM when a build is cancelled.
+  terminationGracePeriodSeconds: 600
+  # The image-builder image runs as `imagebuilder` (uid/gid 1001 on the
+  # ubuntu:24.04 base, where 1000 is the stock `ubuntu` user). Verify with:
+  #   docker run --rm --entrypoint id <builder image>
+  podSecurityContext:
+    runAsUser: 1001
+    runAsGroup: 1001
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
+# -- Prism Central connection used by every build unless overridden per build.
+nutanix:
+  # Use an existing Secret with keys NUTANIX_ENDPOINT, NUTANIX_PORT,
+  # NUTANIX_INSECURE, NUTANIX_USERNAME, NUTANIX_PASSWORD (and optionally
+  # RHSM_USER / RHSM_PASS for RHEL builds). If empty, one is created from
+  # `credentials` below.
+  existingSecret: ""
+  credentials:
+    endpoint: ""          # Prism Central host/IP, no scheme
+    port: "9440"
+    insecure: false
+    username: ""
+    password: ""
+    rhsmUser: ""
+    rhsmPass: ""
+
+# -- Form defaults shown in the UI.
+defaults:
+  clusterName: ""        # Prism Element cluster to build on
+  subnetName: ""         # subnet for the build VM; must be reachable via SSH from build pods
+  kubernetesVersion: v1.36.1
+  cpus: 2
+  memoryMB: 4096
+  diskSizeGB: 40
+  imageNamePrefix: "nkp-"
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""
+
+# -- What users can pick from. `id` must match packer/nutanix/<id>.json and the
+# `build-nutanix-<id>` make target in images/capi/Makefile.
+catalog:
+  operatingSystems:
+    - id: ubuntu-2204
+      label: Ubuntu 22.04
+    - id: ubuntu-2404
+      label: Ubuntu 24.04
+    - id: ubuntu-2604
+      label: Ubuntu 26.04
+    - id: rockylinux-9
+      label: Rocky Linux 9
+    - id: rhel-9
+      label: RHEL 9
+      requiresImageURL: true
+      requiresRHSM: true
+    - id: flatcar
+      label: Flatcar
+      # packer/nutanix/flatcar.json names a local file, not a URL.
+      requiresImageURL: true
+  # Suggestions in the version picker; users may type any v1.X.Y. Match these
+  # to the Kubernetes versions supported by your NKP release.
+  kubernetesVersions:
+    - v1.36.1
+    - v1.35.0
+    - v1.34.2
+
+features:
+  # Let users enter their own Prism Central / RHSM credentials per build.
+  allowCredentialOverride: true
+  # Let users pass extra Packer variables (credentials, SSH, image naming and
+  # ansible role/post-processor hooks are always blocked).
+  allowExtraVars: true
+
+# -- Optional HTTP basic auth in front of the UI. Prefer an authenticating
+# ingress / oauth2-proxy for anything beyond a lab.
+auth:
+  basic:
+    enabled: false
+    username: admin
+    password: ""
+    existingSecret: ""   # keys: username, password
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # Log streams for long builds need long-lived connections:
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: nkp-image-builder.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,21 @@
+NKP Image Builder is deployed in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+Open: {{ range .Values.ingress.hosts }}http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}{{ end }}
+{{- else }}
+Open the UI with:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nkpib.fullname" . }} 8080:{{ .Values.service.port }}
+  then browse to http://localhost:8080
+{{- end }}
+
+Builds run as Jobs labelled app.kubernetes.io/managed-by=nkp-image-builder-webui:
+  kubectl -n {{ .Release.Namespace }} get jobs -l app.kubernetes.io/managed-by=nkp-image-builder-webui
+
+Build pods must be able to reach Prism Central on port {{ .Values.nutanix.credentials.port | default "9440" }} and SSH (22) to
+VMs on the build subnet, plus the internet (or your mirrors/proxy) for packages.
+{{- if not .Values.auth.basic.enabled }}
+
+WARNING: the UI has no authentication. Anyone who can reach it can start builds
+with the configured Prism Central credentials. Enable auth.basic or put it behind
+an authenticating ingress.
+{{- end }}
