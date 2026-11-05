@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"log/slog"
 
@@ -32,6 +33,7 @@ func testConfig() *Config {
 		Features: FeatureConfig{AllowCredentialOverride: true, AllowExtraVars: true},
 	}
 	cfg.applyDefaults()
+	now = func() time.Time { return time.Date(2026, 11, 5, 14, 30, 22, 0, time.FixedZone("x", -5*3600)) }
 	return cfg
 }
 
@@ -41,11 +43,31 @@ func TestNormalizeDefaults(t *testing.T) {
 	if err := r.normalize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if r.ImageName != "nkp-ubuntu-2204-kube-v1.34.2" {
+	if r.ImageName != "nkp-ubuntu-22.04-release-1.34.2-20261105193022.qcow2" {
 		t.Errorf("image name = %q", r.ImageName)
 	}
 	if r.ClusterName != "pe-01" || r.SubnetName != "vlan-100" || r.CPUs != 2 || r.MemoryMB != 4096 || r.DiskSizeGB != 40 {
 		t.Errorf("defaults not applied: %+v", r)
+	}
+}
+
+func TestDefaultImageName(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	d := BuildDefaults{ImageNamePrefix: "nkp-"}
+	cases := map[string]struct {
+		d    BuildDefaults
+		o    OSOption
+		want string
+	}{
+		"ubuntu":   {d, OSOption{ID: "ubuntu-2404"}, "nkp-ubuntu-24.04-release-1.36.1-20260102030405.qcow2"},
+		"rocky":    {d, OSOption{ID: "rockylinux-9"}, "nkp-rockylinux-9-release-1.36.1-20260102030405.qcow2"},
+		"override": {d, OSOption{ID: "rhel-9", ImageNameOS: "rhel-9.6"}, "nkp-rhel-9.6-release-1.36.1-20260102030405.qcow2"},
+		"template": {BuildDefaults{ImageNameTemplate: "{os}-k8s-{version}"}, OSOption{ID: "flatcar"}, "flatcar-k8s-1.36.1"},
+	}
+	for name, c := range cases {
+		if got := defaultImageName(c.d, c.o, "v1.36.1", ts); got != c.want {
+			t.Errorf("%s: got %q, want %q", name, got, c.want)
+		}
 	}
 }
 
@@ -112,7 +134,7 @@ func TestPackerVars(t *testing.T) {
 		"crictl_version":         "1.34.0",
 		"nutanix_cluster_name":   "pe-01",
 		"nutanix_subnet_name":    "vlan-100",
-		"image_name":             "nkp-ubuntu-2204-kube-v1.34.2",
+		"image_name":             "nkp-ubuntu-22.04-release-1.34.2-20261105193022.qcow2",
 		"cpus":                   "2",
 		"memory":                 "4096",
 		"disk_size_gb":           "40",
@@ -245,7 +267,7 @@ func TestAPICreateListGetDelete(t *testing.T) {
 	}
 	var created Build
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
-	if created.ID == "" || created.ImageName != "nkp-ubuntu-2204-kube-v1.35.0" {
+	if created.ID == "" || created.ImageName != "nkp-ubuntu-22.04-release-1.35.0-20261105193022.qcow2" {
 		t.Fatalf("created = %+v", created)
 	}
 

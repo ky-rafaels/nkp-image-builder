@@ -59,6 +59,11 @@ type BuildDefaults struct {
 	MemoryMB          int    `json:"memoryMB"`
 	DiskSizeGB        int    `json:"diskSizeGB"`
 	ImageNamePrefix   string `json:"imageNamePrefix"`
+	// ImageNameTemplate builds the default image name. Placeholders:
+	// {prefix} ImageNamePrefix, {os} OSOption.ImageNameOS (e.g. ubuntu-24.04),
+	// {version} Kubernetes version without the "v" (e.g. 1.36.1),
+	// {timestamp} UTC build time as YYYYMMDDhhmmss.
+	ImageNameTemplate string `json:"imageNameTemplate"`
 	HTTPProxy         string `json:"httpProxy"`
 	HTTPSProxy        string `json:"httpsProxy"`
 	NoProxy           string `json:"noProxy"`
@@ -73,6 +78,9 @@ type OSOption struct {
 	DefaultImageURL  string `json:"defaultImageURL"`
 	RequiresImageURL bool   `json:"requiresImageURL"`
 	RequiresRHSM     bool   `json:"requiresRHSM"`
+	// ImageNameOS is the {os} part of default image names. Derived from ID
+	// when empty: ubuntu-2404 -> ubuntu-24.04, rockylinux-9 -> rockylinux-9.
+	ImageNameOS string `json:"imageNameOS"`
 }
 
 type CatalogConfig struct {
@@ -142,7 +150,16 @@ func (c *Config) applyDefaults() {
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		}
 	}
+	for i := range c.Catalog.OperatingSystems {
+		o := &c.Catalog.OperatingSystems[i]
+		if o.ImageNameOS == "" {
+			o.ImageNameOS = reYearMonthOS.ReplaceAllString(o.ID, "$1$2.$3")
+		}
+	}
 	d := &c.Defaults
+	if d.ImageNameTemplate == "" {
+		d.ImageNameTemplate = defaultImageNameTemplate
+	}
 	if d.KubernetesVersion == "" {
 		d.KubernetesVersion = "v1.36.1"
 	}

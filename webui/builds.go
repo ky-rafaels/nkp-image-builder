@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -137,6 +138,31 @@ func (f fieldErrors) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+const defaultImageNameTemplate = "{prefix}{os}-release-{version}-{timestamp}.qcow2"
+
+// reYearMonthOS turns "ubuntu-2404" into "ubuntu-24.04" for image names.
+var reYearMonthOS = regexp.MustCompile(`^(.+-)(\d{2})(\d{2})$`)
+
+// now is replaced in tests.
+var now = time.Now
+
+func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, t time.Time) string {
+	tmpl := d.ImageNameTemplate
+	if tmpl == "" {
+		tmpl = defaultImageNameTemplate
+	}
+	osName := o.ImageNameOS
+	if osName == "" {
+		osName = reYearMonthOS.ReplaceAllString(o.ID, "$1$2.$3")
+	}
+	return strings.NewReplacer(
+		"{prefix}", d.ImageNamePrefix,
+		"{os}", osName,
+		"{version}", strings.TrimPrefix(k8sVersion, "v"),
+		"{timestamp}", t.UTC().Format("20060102150405"),
+	).Replace(tmpl)
+}
+
 // normalize fills defaults and validates. It returns fieldErrors so the UI
 // can highlight individual inputs.
 func (r *BuildRequest) normalize(cfg *Config) error {
@@ -184,7 +210,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		errs["kubernetesVersion"] = "must look like v1.36.1"
 	}
 	if r.ImageName == "" && ok && reK8sVersion.MatchString(r.KubernetesVersion) {
-		r.ImageName = d.ImageNamePrefix + r.OS + "-kube-" + r.KubernetesVersion
+		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, now())
 	}
 	if !reImageName.MatchString(r.ImageName) {
 		errs["imageName"] = "1-80 chars: letters, digits, '.', '_' or '-'"

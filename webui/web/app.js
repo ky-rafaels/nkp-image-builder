@@ -113,8 +113,13 @@ function onFormChange() {
   const f = $("#build-form");
   const os = selectedOS();
   if (!os) return;
-  const prefix = state.config.defaults.imageNamePrefix || "";
-  $("#image-name-default").textContent = `${prefix}${os.id}-kube-${f.kubernetesVersion.value.trim() || "…"}`;
+  const d = state.config.defaults;
+  const version = f.kubernetesVersion.value.trim().replace(/^v/, "") || "…";
+  $("#image-name-default").textContent = (d.imageNameTemplate || "")
+    .replaceAll("{prefix}", d.imageNamePrefix || "")
+    .replaceAll("{os}", os.imageNameOS || os.id)
+    .replaceAll("{version}", version)
+    .replaceAll("{timestamp}", "<timestamp>");
   $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
   // OSes without a usable default image must pick a Prism image or a URL.
   $("#source-mode-default").classList.toggle("hidden", os.requiresImageURL);

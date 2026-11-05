@@ -78,12 +78,20 @@ defaults:
   memoryMB: 4096
   diskSizeGB: 40
   imageNamePrefix: "nkp-"
+  # Default image name when the form's name field is left blank. Placeholders:
+  #   {prefix}    imageNamePrefix above
+  #   {os}        catalog imageNameOS (derived from id: ubuntu-2404 -> ubuntu-24.04)
+  #   {version}   Kubernetes version without the "v", e.g. 1.36.1
+  #   {timestamp} UTC build start time, YYYYMMDDhhmmss
+  # e.g. nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2
+  imageNameTemplate: "{prefix}{os}-release-{version}-{timestamp}.qcow2"
   httpProxy: ""
   httpsProxy: ""
   noProxy: ""
 
 # -- What users can pick from. `id` must match packer/nutanix/<id>.json and the
-# `build-nutanix-<id>` make target in images/capi/Makefile.
+# `build-nutanix-<id>` make target in images/capi/Makefile. Optional
+# `imageNameOS` overrides the {os} part of the default image name.
 catalog:
   operatingSystems:
     - id: ubuntu-2204
