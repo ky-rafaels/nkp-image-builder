@@ -58,7 +58,7 @@ nutanix:
   # NUTANIX_INSECURE, NUTANIX_USERNAME, NUTANIX_PASSWORD (and optionally
   # RHSM_USER / RHSM_PASS for RHEL builds). If empty, one is created from
   # `credentials` below.
-  existingSecret: true
+  existingSecret: prism-central-creds
   credentials:
     endpoint: ""          # Prism Central host/IP, no scheme
     port: "9440"
