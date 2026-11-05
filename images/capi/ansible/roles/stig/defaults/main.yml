@@ -88,3 +88,8 @@ stig_grub_password_hash: ""
 stig_fapolicyd_trusted_dirs:
   - /usr/local/bin
   - /usr/local/sbin
+
+# Executables that later build steps run after fapolicyd is enforcing (the
+# goss binary). Allowed by exact path in a build-only rule file that
+# packer/files/stig/finalize-stig.sh deletes before the final scan.
+stig_fapolicyd_build_allow_paths: []

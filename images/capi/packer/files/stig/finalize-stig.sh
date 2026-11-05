@@ -50,6 +50,13 @@ if [[ ${#rule_args[@]} -gt 0 ]]; then
     "${rule_args[@]}" "${STIG_DATASTREAM}" >/dev/null
 fi
 
+section "Removing build-only fapolicyd allowances and the goss binary"
+rm -f /etc/fapolicyd/rules.d/36-image-builder-build.rules
+rm -rf /tmp/goss /tmp/goss-* /tmp/goss-spec.yaml
+fagenrules --load
+systemctl restart fapolicyd
+for _ in $(seq 1 30); do systemctl is-active --quiet fapolicyd && break; sleep 1; done
+
 section "Checking the container runtime under fapolicyd"
 systemctl is-active --quiet fapolicyd || { echo "fapolicyd is not running" >&2; exit 1; }
 systemctl restart containerd

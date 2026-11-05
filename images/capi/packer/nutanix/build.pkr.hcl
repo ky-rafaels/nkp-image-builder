@@ -63,6 +63,8 @@ build {
         stig_extra_exceptions   = jsondecode(var.stig_extra_exceptions)
         stig_remote_syslog      = var.stig_remote_syslog
         stig_grub_password_hash = var.stig_grub_password_hash
+        # goss runs after the STIG role has fapolicyd enforcing.
+        stig_fapolicyd_build_allow_paths = [local.goss_download_path]
       }),
       "--scp-extra-args=${local.ansible_scp_extra_args}",
     ]
@@ -72,6 +74,7 @@ build {
 
   provisioner "goss" {
     arch           = var.goss_arch
+    download_path  = local.goss_download_path
     format         = var.goss_format
     format_options = var.goss_format_options
     goss_file      = var.goss_entry_file

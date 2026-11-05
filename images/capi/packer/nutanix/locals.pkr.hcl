@@ -17,6 +17,11 @@ locals {
   # non-FIPS values when FIPS is off. The DISA STIG requires FIPS mode, so
   # stig_enabled implies it.
   fips_enabled = var.fips_enabled || var.stig_enabled
+
+  # Where the goss provisioner puts its binary (the plugin's default path,
+  # made explicit). STIG builds allow exactly this path through fapolicyd
+  # until the final STIG step removes both the rule and the binary.
+  goss_download_path = "/tmp/goss-${var.goss_version}-linux-${var.goss_arch}"
   kubernetes_container_registry = local.fips_enabled ? var.fips_kubernetes_container_registry : var.kubernetes_container_registry
   kubernetes_build_metadata     = local.fips_enabled ? var.fips_kubernetes_build_metadata : ""
   containerd_version            = local.fips_enabled ? var.fips_containerd_version : var.containerd_version

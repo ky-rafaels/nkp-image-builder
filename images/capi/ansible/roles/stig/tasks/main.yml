@@ -143,6 +143,19 @@
     group: fapolicyd
     mode: "0644"
 
+- name: Allow later build steps' executables in fapolicyd (removed at the end of the build)
+  ansible.builtin.copy:
+    dest: /etc/fapolicyd/rules.d/36-image-builder-build.rules
+    owner: root
+    group: fapolicyd
+    mode: "0644"
+    content: |
+      # Build-time only: deleted by image-builder's final STIG step.
+      {% for p in stig_fapolicyd_build_allow_paths %}
+      allow perm=execute all : path={{ p }}
+      {% endfor %}
+  when: stig_fapolicyd_build_allow_paths | length > 0
+
 # --- Site-specific settings the STIG can't remediate generically.
 
 - name: Set the GRUB superuser password (V-257787)
