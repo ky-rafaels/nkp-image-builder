@@ -157,7 +157,11 @@ service:
 ingress:
   enabled: true
   className: "kommander-traefik"
-  annotations: {}
+  annotations: 
+    cert-manager.io/cluster-issuer: selfsigned-issuer
+    cert-manager.io/duration: 2160h # 90 days
+    cert-manager.io/renew-before: 360h # 15 days
+    traefik.ingress.kubernetes.io/router.tls: "true"
     # Log streams for long builds need long-lived connections:
     # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     # nginx.ingress.kubernetes.io/proxy-buffering: "off"
@@ -166,7 +170,10 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
-  tls: []
+  tls: 
+    - secretName: nkp-image-builder-tls
+      hosts:
+        - nkp-image-builder.10.38.48.51.nip.io
 
 nodeSelector: {}
 tolerations: []
