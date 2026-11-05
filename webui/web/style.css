@@ -151,6 +151,27 @@ input.invalid, textarea.invalid { border-color: var(--danger); }
 .check { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; font-size: 13px; }
 .check input { width: auto; }
 
+.segmented {
+  display: flex; flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+  max-width: 100%;
+}
+.segmented label {
+  position: relative;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+}
+.segmented label:last-child { border-right: 0; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label:has(input:checked) { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.source-input { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+
 .os-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .os-card {
   position: relative;

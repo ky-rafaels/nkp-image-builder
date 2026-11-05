@@ -35,7 +35,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "nkpib.nutanixSecretName" -}}
-{{- default (printf "%s-nutanix" (include "nkpib.fullname" .)) .Values.nutanix.existingSecret }}
+{{- $existing := .Values.nutanix.existingSecret }}
+{{- if and $existing (not (kindIs "string" $existing)) }}
+{{- fail (printf "nutanix.existingSecret must be the NAME of a Secret (got %v); leave it \"\" to have the chart create one from nutanix.credentials" $existing) }}
+{{- end }}
+{{- default (printf "%s-nutanix" (include "nkpib.fullname" .)) $existing }}
 {{- end }}
 
 {{- define "nkpib.authSecretName" -}}

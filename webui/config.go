@@ -67,8 +67,9 @@ type BuildDefaults struct {
 type OSOption struct {
 	ID    string `json:"id"`    // matches packer/nutanix/<id>.json and build-nutanix-<id>
 	Label string `json:"label"` // human readable
-	// DefaultImageURL is informational; when empty and RequiresImageURL is
-	// set, the user must supply a source image (e.g. RHEL KVM guest image).
+	// DefaultImageURL is informational. When RequiresImageURL is set the
+	// user must supply a source image -- either a URL or an image already in
+	// Prism Central (e.g. a RHEL KVM guest image).
 	DefaultImageURL  string `json:"defaultImageURL"`
 	RequiresImageURL bool   `json:"requiresImageURL"`
 	RequiresRHSM     bool   `json:"requiresRHSM"`

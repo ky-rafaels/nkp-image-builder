@@ -56,7 +56,8 @@ builder:
 nutanix:
   # Use an existing Secret with keys NUTANIX_ENDPOINT, NUTANIX_PORT,
   # NUTANIX_INSECURE, NUTANIX_USERNAME, NUTANIX_PASSWORD (and optionally
-  # RHSM_USER / RHSM_PASS for RHEL builds). If empty, one is created from
+  # RHSM_USER / RHSM_PASS for RHEL builds). This is the Secret's NAME (e.g.
+  # "prism-central-creds"), not true/false. If empty, one is created from
   # `credentials` below.
   existingSecret: prism-central-creds
   credentials:

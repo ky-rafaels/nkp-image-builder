@@ -116,10 +116,21 @@ function onFormChange() {
   const prefix = state.config.defaults.imageNamePrefix || "";
   $("#image-name-default").textContent = `${prefix}${os.id}-kube-${f.kubernetesVersion.value.trim() || "…"}`;
   $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
-  $("#source-image-hint").textContent = os.requiresImageURL
-    ? "This OS has no public cloud image; point at a KVM/qcow2 image reachable from Prism Central."
-    : os.defaultImageURL ? `Defaults to ${os.defaultImageURL}` : "Defaults to the image in packer/nutanix/" + os.id + ".json";
+  // OSes without a usable default image must pick a Prism image or a URL.
+  $("#source-mode-default").classList.toggle("hidden", os.requiresImageURL);
+  if (os.requiresImageURL && sourceMode() === "default") {
+    f.querySelector("input[name=sourceMode][value=prism]").checked = true;
+  }
+  $("#source-image-hint").textContent = os.defaultImageURL
+    ? `Downloads ${os.defaultImageURL}`
+    : `Downloads the image_url in packer/nutanix/${os.id}.json`;
+  const mode = sourceMode();
+  $$("[data-source-mode]").forEach((n) => n.classList.toggle("hidden", n.dataset.sourceMode !== mode));
   $("#rhsm-fields").classList.toggle("hidden", !os.requiresRHSM);
+}
+
+function sourceMode() {
+  return $("#build-form").querySelector("input[name=sourceMode]:checked")?.value || "default";
 }
 
 function parseExtraVars(text) {
@@ -146,7 +157,8 @@ function collectRequest() {
     cpus: num(f.cpus.value),
     memoryMB: num(f.memoryMB.value),
     diskSizeGB: num(f.diskSizeGB.value),
-    sourceImageURL: f.sourceImageURL.value,
+    sourceImageURL: sourceMode() === "url" ? f.sourceImageURL.value : "",
+    sourceImage: sourceMode() === "prism" ? f.sourceImage.value : "",
     httpProxy: f.httpProxy.value,
     httpsProxy: f.httpsProxy.value,
     noProxy: f.noProxy.value,
@@ -263,7 +275,7 @@ function renderDetailHeader(b) {
     ["Cluster", r.clusterName],
     ["Subnet", r.subnetName],
     ["VM size", r.cpus ? `${r.cpus} vCPU · ${r.memoryMB} MB · ${r.diskSizeGB} GB` : null],
-    ["Source image", r.sourceImageURL],
+    ["Source image", r.sourceImage ? `Prism Central: ${r.sourceImage}` : r.sourceImageURL || "repo default"],
     ["Credentials", r.credentials ? `override (${r.credentials.username || "default user"})` : "service default"],
     ["Created", fmtTime(b.createdAt)],
     ["Duration", fmtDuration(b)],

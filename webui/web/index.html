@@ -79,12 +79,25 @@
               <small class="field-error" data-error-for="diskSizeGB"></small>
             </label>
           </div>
-          <label class="field" id="source-image-field">
-            <span>Source image URL <em id="source-image-required" class="req hidden">required</em></span>
-            <input name="sourceImageURL" type="url" placeholder="https://…/image.qcow2" spellcheck="false">
-            <small class="hint" id="source-image-hint"></small>
+          <div class="field" id="source-image-field">
+            <span>Source image <em id="source-image-required" class="req hidden">required</em></span>
+            <div class="segmented" role="radiogroup" aria-label="Source image">
+              <label id="source-mode-default"><input type="radio" name="sourceMode" value="default" checked> Repo default</label>
+              <label><input type="radio" name="sourceMode" value="prism"> Prism Central image</label>
+              <label><input type="radio" name="sourceMode" value="url"> Download URL</label>
+            </div>
+            <div class="source-input" data-source-mode="prism">
+              <input name="sourceImage" placeholder="Image name or UUID, e.g. rhel-9.6-kvm" autocomplete="off" spellcheck="false" aria-label="Prism Central image name or UUID">
+              <small class="hint">An image that already exists in Prism Central. Use the UUID if the name isn't unique. The image is only read, never modified or deleted.</small>
+            </div>
+            <div class="source-input" data-source-mode="url">
+              <input name="sourceImageURL" type="url" placeholder="https://…/image.qcow2" spellcheck="false" aria-label="Source image URL">
+              <small class="hint">Prism Central downloads this cloud image (qcow2/raw) before the build.</small>
+            </div>
+            <small class="hint" id="source-image-hint" data-source-mode="default"></small>
+            <small class="field-error" data-error-for="sourceImage"></small>
             <small class="field-error" data-error-for="sourceImageURL"></small>
-          </label>
+          </div>
         </fieldset>
 
         <details class="advanced" id="credentials-section">

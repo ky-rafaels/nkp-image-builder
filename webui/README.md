@@ -39,7 +39,9 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Image name | `image_name` (also the build VM name) |
 | Cluster / subnet | `nutanix_cluster_name` / `nutanix_subnet_name` |
 | vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb` |
-| Source image URL | `image_url` (required for RHEL and Flatcar) |
+| Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
+| Source image: Prism Central image | `source_image_uuid` if the value is a UUID, otherwise `source_image_name`. The build boots from that existing image and never modifies or deletes it. |
+| Source image: download URL | `image_url` |
 | Proxies, extra packages | `http_proxy`, `https_proxy`, `no_proxy`, `extra_debs`, `extra_rpms` |
 | Extra variables | any other variable in `packer/nutanix/variables.pkr.hcl` except credentials, SSH, naming and custom ansible/post-processor hooks |
 | Credential override | per-build Secret: `NUTANIX_ENDPOINT/PORT/INSECURE/USERNAME/PASSWORD`, `RHSM_USER/PASS` |

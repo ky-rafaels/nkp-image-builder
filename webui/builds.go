@@ -30,21 +30,24 @@ const (
 // anywhere except the per-build Secret, and are stripped before the request is
 // stored as an annotation on the Job.
 type BuildRequest struct {
-	OS                string            `json:"os"`
-	KubernetesVersion string            `json:"kubernetesVersion"`
-	ImageName         string            `json:"imageName"`
-	ClusterName       string            `json:"clusterName"`
-	SubnetName        string            `json:"subnetName"`
-	CPUs              int               `json:"cpus"`
-	MemoryMB          int               `json:"memoryMB"`
-	DiskSizeGB        int               `json:"diskSizeGB"`
-	SourceImageURL    string            `json:"sourceImageURL,omitempty"`
-	HTTPProxy         string            `json:"httpProxy,omitempty"`
-	HTTPSProxy        string            `json:"httpsProxy,omitempty"`
-	NoProxy           string            `json:"noProxy,omitempty"`
-	ExtraDebs         string            `json:"extraDebs,omitempty"`
-	ExtraRPMs         string            `json:"extraRpms,omitempty"`
-	ExtraVars         map[string]string `json:"extraVars,omitempty"`
+	OS                string `json:"os"`
+	KubernetesVersion string `json:"kubernetesVersion"`
+	ImageName         string `json:"imageName"`
+	ClusterName       string `json:"clusterName"`
+	SubnetName        string `json:"subnetName"`
+	CPUs              int    `json:"cpus"`
+	MemoryMB          int    `json:"memoryMB"`
+	DiskSizeGB        int    `json:"diskSizeGB"`
+	SourceImageURL    string `json:"sourceImageURL,omitempty"`
+	// SourceImage references an image already in Prism Central, by name or
+	// UUID, to boot the build VM from instead of downloading SourceImageURL.
+	SourceImage string            `json:"sourceImage,omitempty"`
+	HTTPProxy   string            `json:"httpProxy,omitempty"`
+	HTTPSProxy  string            `json:"httpsProxy,omitempty"`
+	NoProxy     string            `json:"noProxy,omitempty"`
+	ExtraDebs   string            `json:"extraDebs,omitempty"`
+	ExtraRPMs   string            `json:"extraRpms,omitempty"`
+	ExtraVars   map[string]string `json:"extraVars,omitempty"`
 
 	// Optional per-build credentials.
 	Credentials *BuildCredentials `json:"credentials,omitempty"`
@@ -75,6 +78,7 @@ var (
 	reVarName    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	reProxy      = regexp.MustCompile(`^[^\s"'\\` + "`" + `$]*$`)
 	rePort       = regexp.MustCompile(`^[0-9]{1,5}$`)
+	reUUID       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	reHost       = regexp.MustCompile(`^[A-Za-z0-9.:\-\[\]]{1,253}$`)
 )
 
@@ -97,6 +101,10 @@ var deniedExtraVars = map[string]bool{
 	"kubernetes_semver": true, "kubernetes_series": true,
 	"kubernetes_deb_version": true, "kubernetes_rpm_version": true,
 	"cpus": true, "memory": true, "disk_size_gb": true, "image_url": true,
+	"source_image_name": true, "source_image_uuid": true,
+	// Would delete the source image from Prism Central after the build --
+	// destructive when the source is a shared, pre-existing image.
+	"source_image_delete": true,
 }
 
 // buildWrapper runs `make <target>` in its own process group and turns the
@@ -136,7 +144,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	d := cfg.Defaults
 	trim := func(s *string) { *s = strings.TrimSpace(*s) }
 	for _, s := range []*string{&r.OS, &r.KubernetesVersion, &r.ImageName, &r.ClusterName,
-		&r.SubnetName, &r.SourceImageURL, &r.HTTPProxy, &r.HTTPSProxy, &r.NoProxy,
+		&r.SubnetName, &r.SourceImageURL, &r.SourceImage, &r.HTTPProxy, &r.HTTPSProxy, &r.NoProxy,
 		&r.ExtraDebs, &r.ExtraRPMs} {
 		trim(s)
 	}
@@ -202,8 +210,16 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 			!reProxy.MatchString(r.SourceImageURL) {
 			errs["sourceImageURL"] = "must be an http(s) URL"
 		}
-	} else if ok && osOpt.RequiresImageURL {
-		errs["sourceImageURL"] = osOpt.Label + " requires a source image URL"
+	}
+	if r.SourceImage != "" {
+		if r.SourceImageURL != "" {
+			errs["sourceImage"] = "choose either a URL or an existing Prism Central image, not both"
+		} else if !reNutanixRef.MatchString(r.SourceImage) {
+			errs["sourceImage"] = "invalid image name"
+		}
+	}
+	if r.SourceImageURL == "" && r.SourceImage == "" && ok && osOpt.RequiresImageURL {
+		errs["sourceImage"] = osOpt.Label + " has no default source image: give a URL or an existing Prism Central image"
 	}
 	for name, v := range map[string]string{"httpProxy": r.HTTPProxy, "httpsProxy": r.HTTPSProxy, "noProxy": r.NoProxy} {
 		if len(v) > 1024 || !reProxy.MatchString(v) {
@@ -296,6 +312,11 @@ func (r *BuildRequest) packerVars() map[string]string {
 	set("memory", fmt.Sprint(r.MemoryMB))
 	set("disk_size_gb", fmt.Sprint(r.DiskSizeGB))
 	set("image_url", r.SourceImageURL)
+	if reUUID.MatchString(r.SourceImage) {
+		set("source_image_uuid", strings.ToLower(r.SourceImage))
+	} else {
+		set("source_image_name", r.SourceImage)
+	}
 	set("http_proxy", r.HTTPProxy)
 	set("https_proxy", r.HTTPSProxy)
 	set("no_proxy", r.NoProxy)

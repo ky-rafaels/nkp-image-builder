@@ -21,12 +21,17 @@ source "nutanix" "node" {
   ssh_username           = var.ssh_username
   user_data              = var.user_data
 
+  # Boot disk source, in order of precedence: an existing Prism Central image
+  # by UUID, by name, or else a download from image_url. Unused fields are
+  # left null so the plugin sees exactly one source.
   vm_disks {
     disk_size_gb        = var.disk_size_gb
     image_type          = "DISK_IMAGE"
     source_image_delete = var.source_image_delete
     source_image_force  = var.source_image_force
-    source_image_uri    = var.image_url
+    source_image_uuid   = var.source_image_uuid != "" ? var.source_image_uuid : null
+    source_image_name   = var.source_image_uuid == "" && var.source_image_name != "" ? var.source_image_name : null
+    source_image_uri    = var.source_image_uuid == "" && var.source_image_name == "" ? var.image_url : null
   }
 
   vm_force_delete = var.vm_force_delete

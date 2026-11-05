@@ -55,18 +55,20 @@ func TestNormalizeRejects(t *testing.T) {
 		req   BuildRequest
 		field string
 	}{
-		"unknown os":       {BuildRequest{OS: "windows-2022"}, "os"},
-		"bad version":      {BuildRequest{OS: "ubuntu-2204", KubernetesVersion: "1.34"}, "kubernetesVersion"},
-		"shell in name":    {BuildRequest{OS: "ubuntu-2204", ImageName: "x;rm -rf /"}, "imageName"},
-		"rhel needs url":   {BuildRequest{OS: "rhel-9"}, "sourceImageURL"},
-		"file url":         {BuildRequest{OS: "ubuntu-2204", SourceImageURL: "file:///etc/passwd"}, "sourceImageURL"},
-		"denied extra var": {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"custom_post_processor_command": "curl evil"}}, "extraVars"},
-		"bad extra var":    {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"Foo-Bar": "x"}}, "extraVars"},
-		"newline value":    {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"containerd_version": "1\n2"}}, "extraVars"},
-		"package inject":   {BuildRequest{OS: "ubuntu-2204", ExtraDebs: "vim; curl x|sh"}, "extraDebs"},
-		"half creds":       {BuildRequest{OS: "ubuntu-2204", Credentials: &BuildCredentials{Username: "admin"}}, "credentials.password"},
-		"endpoint scheme":  {BuildRequest{OS: "ubuntu-2204", Credentials: &BuildCredentials{Endpoint: "https://pc"}}, "credentials.endpoint"},
-		"tiny memory":      {BuildRequest{OS: "ubuntu-2204", MemoryMB: 512}, "memoryMB"},
+		"unknown os":        {BuildRequest{OS: "windows-2022"}, "os"},
+		"bad version":       {BuildRequest{OS: "ubuntu-2204", KubernetesVersion: "1.34"}, "kubernetesVersion"},
+		"shell in name":     {BuildRequest{OS: "ubuntu-2204", ImageName: "x;rm -rf /"}, "imageName"},
+		"rhel needs source": {BuildRequest{OS: "rhel-9"}, "sourceImage"},
+		"url and pc image":  {BuildRequest{OS: "ubuntu-2204", SourceImageURL: "https://x/y.img", SourceImage: "base"}, "sourceImage"},
+		"no delete source":  {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"source_image_delete": "true"}}, "extraVars"},
+		"file url":          {BuildRequest{OS: "ubuntu-2204", SourceImageURL: "file:///etc/passwd"}, "sourceImageURL"},
+		"denied extra var":  {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"custom_post_processor_command": "curl evil"}}, "extraVars"},
+		"bad extra var":     {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"Foo-Bar": "x"}}, "extraVars"},
+		"newline value":     {BuildRequest{OS: "ubuntu-2204", ExtraVars: map[string]string{"containerd_version": "1\n2"}}, "extraVars"},
+		"package inject":    {BuildRequest{OS: "ubuntu-2204", ExtraDebs: "vim; curl x|sh"}, "extraDebs"},
+		"half creds":        {BuildRequest{OS: "ubuntu-2204", Credentials: &BuildCredentials{Username: "admin"}}, "credentials.password"},
+		"endpoint scheme":   {BuildRequest{OS: "ubuntu-2204", Credentials: &BuildCredentials{Endpoint: "https://pc"}}, "credentials.endpoint"},
+		"tiny memory":       {BuildRequest{OS: "ubuntu-2204", MemoryMB: 512}, "memoryMB"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -124,6 +126,27 @@ func TestPackerVars(t *testing.T) {
 	}
 	if _, ok := v["image_url"]; ok {
 		t.Error("image_url should be unset so the per-OS default applies")
+	}
+}
+
+func TestSourceImageFromPrismCentral(t *testing.T) {
+	cfg := testConfig()
+	byName := &BuildRequest{OS: "rhel-9", SourceImage: "rhel-9.6-kvm-golden"}
+	if err := byName.normalize(cfg); err != nil {
+		t.Fatalf("existing image should satisfy RHEL's source requirement: %v", err)
+	}
+	v := byName.packerVars()
+	if v["source_image_name"] != "rhel-9.6-kvm-golden" || v["source_image_uuid"] != "" || v["image_url"] != "" {
+		t.Errorf("by name: %v", v)
+	}
+
+	byUUID := &BuildRequest{OS: "ubuntu-2204", SourceImage: "6F1C2B3A-1234-4ABC-9DEF-0123456789AB"}
+	if err := byUUID.normalize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	v = byUUID.packerVars()
+	if v["source_image_uuid"] != "6f1c2b3a-1234-4abc-9def-0123456789ab" || v["source_image_name"] != "" {
+		t.Errorf("by uuid: %v", v)
 	}
 }
 

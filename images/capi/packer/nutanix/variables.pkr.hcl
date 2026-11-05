@@ -221,7 +221,17 @@ variable "guest_os_type" {
 }
 variable "image_url" {
   type        = string
-  description = "URL (or path) of the source disk image to boot from."
+  description = "URL (or path) of the source disk image to boot from. Ignored when source_image_name or source_image_uuid is set."
+}
+variable "source_image_name" {
+  type        = string
+  description = "Name of an image that already exists in Prism Central to boot the build VM from, instead of downloading image_url. Must be unique in Prism Central; use source_image_uuid otherwise."
+  default     = ""
+}
+variable "source_image_uuid" {
+  type        = string
+  description = "UUID of an image that already exists in Prism Central to boot the build VM from. Takes precedence over source_image_name and image_url."
+  default     = ""
 }
 variable "shutdown_command" {
   type        = string
