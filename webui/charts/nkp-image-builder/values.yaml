@@ -5,7 +5,7 @@ image:
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
-- regcred
+  - name: regcred
 replicaCount: 1
 
 # -- Settings for the build Jobs the UI launches.
