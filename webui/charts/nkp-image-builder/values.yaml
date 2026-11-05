@@ -4,8 +4,7 @@ image:
   tag: "v0.1.0"          # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
-imagePullSecrets:
-  - name: regcred
+imagePullSecrets: []
 replicaCount: 1
 
 # -- Settings for the build Jobs the UI launches.
