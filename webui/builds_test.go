@@ -28,11 +28,12 @@ func testConfig() *Config {
 		Catalog: CatalogConfig{
 			OperatingSystems: []OSOption{
 				{ID: "ubuntu-2204", Label: "Ubuntu 22.04"},
-				{ID: "rhel-9", Label: "RHEL 9", RequiresImageURL: true, RequiresRHSM: true, FIPSCapable: true},
-				{ID: "rockylinux-9", Label: "Rocky Linux 9", FIPSCapable: true},
+				{ID: "rhel-9", Label: "RHEL 9", RequiresImageURL: true, RequiresRHSM: true, FIPSCapable: true, STIGCapable: true},
+				{ID: "rockylinux-9", Label: "Rocky Linux 9", FIPSCapable: true, STIGCapable: true},
 			},
 		},
 		FIPS:     FIPSConfig{Enabled: true},
+		STIG:     STIGConfig{Enabled: true},
 		Features: FeatureConfig{AllowCredentialOverride: true, AllowExtraVars: true},
 	}
 	cfg.applyDefaults()
@@ -69,7 +70,7 @@ func TestDefaultImageName(t *testing.T) {
 		"no {fips}": {BuildDefaults{ImageNameTemplate: "{os}{fips}"}, OSOption{ID: "rhel-9"}, "rhel-9"},
 	}
 	for name, c := range cases {
-		if got := defaultImageName(c.d, c.o, "v1.36.1", false, ts); got != c.want {
+		if got := defaultImageName(c.d, c.o, "v1.36.1", false, false, ts); got != c.want {
 			t.Errorf("%s: got %q, want %q", name, got, c.want)
 		}
 	}
@@ -240,6 +241,54 @@ func TestFIPS(t *testing.T) {
 		if fe, ok := err.(fieldErrors); !ok || fe["extraVars"] == "" {
 			t.Errorf("extra var %s should be rejected, got %v", k, err)
 		}
+	}
+}
+
+func TestSTIG(t *testing.T) {
+	cfg := testConfig()
+	cfg.STIG.RemoteSyslog = "logs.example.mil:6514"
+	cfg.STIG.ExtraExceptions = []STIGException{{Rule: "encrypt_partitions", VulnID: "V-257879", Reason: "Nutanix DARE"}}
+
+	r := &BuildRequest{OS: "rhel-9", KubernetesVersion: "v1.36.1", SourceImage: "rhel-9.6", STIG: true}
+	if err := r.normalize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !r.FIPS {
+		t.Error("STIG must imply FIPS")
+	}
+	if r.ImageName != "nkp-rhel-9-fips-stig-release-1.36.1-20261105193022.qcow2" {
+		t.Errorf("image name = %q", r.ImageName)
+	}
+	v := r.packerVars(cfg)
+	if v["stig_enabled"] != "true" || v["fips_enabled"] != "true" || v["stig_remote_syslog"] != "logs.example.mil:6514" {
+		t.Errorf("stig vars: %v", v)
+	}
+	var ex []STIGException
+	if err := json.Unmarshal([]byte(v["stig_extra_exceptions"]), &ex); err != nil || len(ex) != 1 || ex[0].Rule != "encrypt_partitions" {
+		t.Errorf("exceptions = %q (%v)", v["stig_extra_exceptions"], err)
+	}
+
+	for name, c := range map[string]struct {
+		req   BuildRequest
+		cfg   func(*Config)
+		field string
+	}{
+		"os not capable": {BuildRequest{OS: "ubuntu-2204", STIG: true}, nil, "stig"},
+		"disabled":       {BuildRequest{OS: "rockylinux-9", STIG: true}, func(c *Config) { c.STIG.Enabled = false }, "stig"},
+		"fips disabled":  {BuildRequest{OS: "rockylinux-9", STIG: true}, func(c *Config) { c.FIPS.Enabled = false }, "fips"},
+	} {
+		cfg := testConfig()
+		if c.cfg != nil {
+			c.cfg(cfg)
+		}
+		err := c.req.normalize(cfg)
+		if fe, ok := err.(fieldErrors); !ok || fe[c.field] == "" {
+			t.Errorf("%s: want %s error, got %v", name, c.field, err)
+		}
+	}
+	r = &BuildRequest{OS: "rockylinux-9", ExtraVars: map[string]string{"stig_extra_exceptions": "[]"}}
+	if fe, ok := r.normalize(testConfig()).(fieldErrors); !ok || fe["extraVars"] == "" {
+		t.Error("stig_* extra vars must be rejected")
 	}
 }
 

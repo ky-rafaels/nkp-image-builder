@@ -30,5 +30,6 @@ data:
       "catalog" .Values.catalog
       "features" .Values.features
       "fips" (.Values.fips | default dict)
+      "stig" (.Values.stig | default dict)
     }}
     {{- $cfg | toPrettyJson | nindent 4 }}

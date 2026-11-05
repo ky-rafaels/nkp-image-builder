@@ -173,6 +173,11 @@ type configResponse struct {
 	Catalog       CatalogConfig `json:"catalog"`
 	Features      FeatureConfig `json:"features"`
 	FIPS          fipsInfo      `json:"fips"`
+	STIG          stigInfo      `json:"stig"`
+}
+
+type stigInfo struct {
+	Enabled bool `json:"enabled"`
 }
 
 // fipsInfo is the part of FIPSConfig the UI needs; source URLs stay private.
@@ -195,6 +200,7 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 			BuildMetadata:   s.cfg.FIPS.BuildMetadata(),
 			ImageRepository: s.cfg.FIPS.ImageRepository(),
 		},
+		STIG: stigInfo{Enabled: s.cfg.STIG.Enabled},
 	})
 }
 

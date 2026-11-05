@@ -1,0 +1,25 @@
+# DISA STIG exceptions for this Kubernetes node image
+
+Baseline: {{ stig_profile_title }}
+Content: {{ stig_datastream }} (scap-security-guide {{ stig_ssg_version }})
+Tailoring: {{ stig_report_dir }}/tailoring.xml (profile xccdf_org.ssgproject.content_profile_stig_kubernetes_node)
+
+The rules below are deselected because a Kubernetes node cannot operate with
+them applied. Every other rule in the profile was remediated; see
+results.xml / report.html in this directory for the scan of the final image.
+
+| Rule | Vuln ID | Justification |
+|---|---|---|
+{% for e in stig_all_exceptions %}
+| {{ e.rule }} | {{ e.vuln_id | default('') }} | {{ e.reason | default('') | replace('\n', ' ') | trim }} |
+{% endfor %}
+
+## Runtime notes for the assessor
+
+* fapolicyd runs deny-by-default. Non-RPM runtime binaries are in
+  /etc/fapolicyd/trust.d/kubernetes and /etc/fapolicyd/rules.d/35-kubernetes.rules
+  allows CNI plugins installed into /opt/cni/bin at runtime.
+* CNI plugins may change networking sysctls (e.g. per-interface rp_filter) on
+  a running node.
+* The Kubernetes STIG covers the cluster (API server, kubelet configuration,
+  etc.). It is applied by the platform at cluster creation, not by this image.

@@ -697,3 +697,30 @@ variable "fips_containerd_sha256" {
   description = "sha256 of fips_containerd_url. Required unless fips_containerd_url is your own mirror you trust without a checksum."
   default     = "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020"
 }
+
+# --- DISA STIG ----------------------------------------------------------------
+# With stig_enabled the node is hardened with the SCAP Security Guide's DISA
+# STIG profile, tailored for Kubernetes (see ansible/roles/stig), scanned, and
+# the results kept in the image under /usr/share/image-builder/stig. Implies
+# fips_enabled (FIPS mode is a STIG requirement). EL9 only.
+variable "stig_enabled" {
+  type        = bool
+  description = "Harden the image to the DISA STIG (RHEL 9 / Rocky Linux 9). Implies fips_enabled."
+  default     = false
+}
+variable "stig_extra_exceptions" {
+  type        = string
+  description = "JSON list of extra rules to deselect: [{\"rule\": \"<ssg rule id>\", \"vuln_id\": \"V-...\", \"reason\": \"...\"}]."
+  default     = "[]"
+}
+variable "stig_remote_syslog" {
+  type        = string
+  description = "host:port of the remote log host for V-258149 (TCP). Empty leaves it an open finding."
+  default     = ""
+}
+variable "stig_grub_password_hash" {
+  type        = string
+  description = "grub2-mkpasswd-pbkdf2 hash for the GRUB superuser (V-257787). Defaults to $STIG_GRUB_PASSWORD_HASH."
+  default     = env("STIG_GRUB_PASSWORD_HASH")
+  sensitive   = true
+}

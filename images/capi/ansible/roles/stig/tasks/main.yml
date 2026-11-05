@@ -1,0 +1,201 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+- name: Fail if the distribution has no STIG support here
+  ansible.builtin.fail:
+    msg: >-
+      DISA STIG hardening is supported on RHEL 9 and Rocky Linux 9 here, not
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+  when: >-
+    ansible_facts['distribution'] not in ['RedHat', 'Rocky']
+      or ansible_facts['distribution_major_version'] != '9'
+
+- name: Read the kernel FIPS state
+  ansible.builtin.slurp:
+    src: /proc/sys/crypto/fips_enabled
+  register: stig_fips_state
+
+- name: Fail if the system is not in FIPS mode (STIG V-258230, CAT I)
+  ansible.builtin.fail:
+    msg: The DISA STIG requires FIPS mode; build with fips_enabled=true.
+  when: (stig_fips_state.content | b64decode | trim) != '1'
+
+- name: Install the SCAP scanner, SSG content and fapolicyd
+  ansible.builtin.dnf:
+    name:
+      - openscap-scanner
+      - scap-security-guide
+      - fapolicyd
+      - rsyslog
+    state: present
+    lock_timeout: 60
+
+- name: Select the SSG datastream for this distribution
+  ansible.builtin.set_fact:
+    stig_datastream: >-
+      {{ stig_content_dir }}/ssg-{{ 'rl9' if ansible_facts['distribution'] == 'Rocky' else 'rhel9' }}-ds.xml
+    stig_all_exceptions: "{{ stig_kubernetes_exceptions + stig_extra_exceptions }}"
+
+- name: Read the STIG profile metadata
+  ansible.builtin.command: oscap info --profile {{ stig_profile }} {{ stig_datastream }}
+  register: stig_profile_info
+  changed_when: false
+
+- name: Read the SSG version
+  ansible.builtin.command: rpm -q --qf '%{VERSION}-%{RELEASE}' scap-security-guide
+  register: stig_ssg_rpm
+  changed_when: false
+
+- name: Record profile details
+  ansible.builtin.set_fact:
+    # e.g. "DISA STIG for Red Hat Enterprise Linux 9 V2R9", from the description.
+    stig_profile_title: >-
+      {{ stig_profile_info.stdout | regex_search('DISA STIG for [^.]*V\d+R\d+')
+         | default(stig_profile_info.stdout | regex_search('Title: (.*)', '\1') | first, true) }}
+    stig_ssg_version: "{{ stig_ssg_rpm.stdout }}"
+
+- name: Create the STIG evidence directory
+  ansible.builtin.file:
+    path: "{{ stig_report_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the tailoring file
+  ansible.builtin.template:
+    src: tailoring.xml.j2
+    dest: "{{ stig_report_dir }}/tailoring.xml"
+    mode: "0644"
+
+- name: Write the exceptions document
+  ansible.builtin.template:
+    src: exceptions.md.j2
+    dest: "{{ stig_report_dir }}/exceptions.md"
+    mode: "0644"
+
+- name: Check every exception names a rule in the datastream
+  ansible.builtin.shell:
+    cmd: |
+      missing=""
+      for r in {{ (stig_all_exceptions | map(attribute='rule') | list + stig_build_phase_deselect) | join(' ') }}; do
+        grep -q "id=\"xccdf_org.ssgproject.content_rule_${r}\"" {{ stig_datastream }} || missing="$missing $r"
+      done
+      if [ -n "$missing" ]; then echo "Unknown STIG rule(s):$missing" >&2; exit 1; fi
+  changed_when: false
+
+- name: Check the tailored profile resolves
+  ansible.builtin.command: >-
+    oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig_kubernetes_node
+    --tailoring-file {{ stig_report_dir }}/tailoring.xml
+    --rule xccdf_org.ssgproject.content_rule_package_aide_installed
+    {{ stig_datastream }}
+  register: stig_tailoring_check
+  failed_when: stig_tailoring_check.rc not in [0, 2]
+  changed_when: false
+
+- name: Record paths for the final build step
+  ansible.builtin.copy:
+    dest: "{{ stig_report_dir }}/stig.env"
+    mode: "0644"
+    content: |
+      STIG_DATASTREAM={{ stig_datastream }}
+      STIG_TAILORING={{ stig_report_dir }}/tailoring.xml
+      STIG_PROFILE=xccdf_org.ssgproject.content_profile_stig_kubernetes_node
+      STIG_BUILD_PHASE_RULES="{{ stig_build_phase_deselect | map('regex_replace', '^', 'xccdf_org.ssgproject.content_rule_') | join(' ') }}"
+
+# --- Kubernetes allowances that must exist before fapolicyd starts enforcing.
+
+- name: Find executables that are not from an RPM
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      find {{ stig_fapolicyd_trusted_dirs | join(' ') }} -maxdepth 1 -type f -perm -u+x 2>/dev/null |
+        while read -r f; do rpm -qf "$f" >/dev/null 2>&1 || echo "$f"; done
+    executable: /bin/bash
+  register: stig_untrusted_executables
+  changed_when: false
+
+- name: Reset the Kubernetes fapolicyd trust file
+  ansible.builtin.file:
+    path: /etc/fapolicyd/trust.d/kubernetes
+    state: absent
+
+- name: Trust the container runtime binaries in fapolicyd
+  ansible.builtin.command: fapolicyd-cli --file add {{ item }} --trust-file kubernetes
+  loop: "{{ stig_untrusted_executables.stdout_lines }}"
+  changed_when: true
+
+- name: Allow runtime-installed CNI and kubelet plugins in fapolicyd
+  ansible.builtin.copy:
+    src: 35-kubernetes.rules
+    dest: /etc/fapolicyd/rules.d/35-kubernetes.rules
+    owner: root
+    group: fapolicyd
+    mode: "0644"
+
+# --- Site-specific settings the STIG can't remediate generically.
+
+- name: Set the GRUB superuser password (V-257787)
+  ansible.builtin.copy:
+    dest: /boot/grub2/user.cfg
+    content: "GRUB2_PASSWORD={{ stig_grub_password_hash }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: stig_grub_password_hash | length > 0
+
+- name: Forward logs to the remote log host (V-258149)
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/90-remote-loghost.conf
+    content: |
+      # DISA STIG V-258149: off-load audit and system logs.
+      *.* @@{{ stig_remote_syslog }}
+    mode: "0644"
+  when: stig_remote_syslog | length > 0
+
+# --- Remediation.
+
+- name: Apply the DISA STIG profile (this takes several minutes)
+  ansible.builtin.command: >-
+    oscap xccdf eval --remediate
+    --profile xccdf_org.ssgproject.content_profile_stig_kubernetes_node_build
+    --tailoring-file {{ stig_report_dir }}/tailoring.xml
+    --results {{ stig_report_dir }}/remediation-results.xml
+    {{ stig_datastream }}
+  register: stig_remediation
+  # 0: all pass, 2: some rules still fail (e.g. partitioning, which needs a
+  # different disk layout); anything else is an error.
+  failed_when: stig_remediation.rc not in [0, 2]
+  changed_when: true
+
+- name: Summarize the remediation
+  ansible.builtin.debug:
+    msg:
+      - "fixed: {{ stig_remediation.stdout | regex_findall('Result\\s+fixed') | length }}"
+      - "pass: {{ stig_remediation.stdout | regex_findall('Result\\s+pass') | length }}"
+      - "still failing: {{ stig_remediation.stdout | regex_findall('Result\\s+fail') | length }}"
+      - "remediation errors: {{ stig_remediation.stdout | regex_findall('Result\\s+error') | length }}"
+
+- name: Check fapolicyd is enforcing
+  ansible.builtin.command: systemctl is-active fapolicyd
+  changed_when: false
+
+- name: Check the container runtime still executes under fapolicyd
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - /usr/local/bin/containerd --version
+    - /usr/local/sbin/runc --version
+    - /usr/bin/kubelet --version
+    - /usr/bin/kubeadm version -o short
+  changed_when: false

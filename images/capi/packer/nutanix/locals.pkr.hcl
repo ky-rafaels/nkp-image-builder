@@ -8,17 +8,19 @@ locals {
   # packer/config/kubernetes.json
   kubernetes_deb_gpg_key = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/deb/Release.key"
   kubernetes_deb_repo    = "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/deb/"
-  kubernetes_rpm_gpg_key = var.fips_enabled ? var.fips_kubernetes_rpm_gpg_key : "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/repodata/repomd.xml.key"
-  kubernetes_rpm_repo = var.fips_enabled ? (
+  kubernetes_rpm_gpg_key = local.fips_enabled ? var.fips_kubernetes_rpm_gpg_key : "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/repodata/repomd.xml.key"
+  kubernetes_rpm_repo = local.fips_enabled ? (
     var.fips_kubernetes_rpm_repo != "" ? var.fips_kubernetes_rpm_repo : "https://packages.d2iq.com/konvoy/stable/linux/repos/el/kubernetes-${var.kubernetes_semver}-fips/x86_64"
   ) : "https://pkgs.k8s.io/core:/stable:/${var.kubernetes_series}/rpm/"
 
   # FIPS: see the fips_* variables. Everything below collapses to the
-  # non-FIPS values when fips_enabled is false.
-  kubernetes_container_registry = var.fips_enabled ? var.fips_kubernetes_container_registry : var.kubernetes_container_registry
-  kubernetes_build_metadata     = var.fips_enabled ? var.fips_kubernetes_build_metadata : ""
-  containerd_version            = var.fips_enabled ? var.fips_containerd_version : var.containerd_version
-  containerd_fips_url = var.fips_enabled ? (
+  # non-FIPS values when FIPS is off. The DISA STIG requires FIPS mode, so
+  # stig_enabled implies it.
+  fips_enabled = var.fips_enabled || var.stig_enabled
+  kubernetes_container_registry = local.fips_enabled ? var.fips_kubernetes_container_registry : var.kubernetes_container_registry
+  kubernetes_build_metadata     = local.fips_enabled ? var.fips_kubernetes_build_metadata : ""
+  containerd_version            = local.fips_enabled ? var.fips_containerd_version : var.containerd_version
+  containerd_fips_url = local.fips_enabled ? (
     var.fips_containerd_url != "" ? var.fips_containerd_url : "https://packages.d2iq.com/dkp/containerd/containerd-${var.fips_containerd_version}-d2iq.1-rhel-9.6-x86_64_fips.tar.gz"
   ) : ""
 
@@ -156,11 +158,11 @@ locals {
     "containerd_service_url=${local.containerd_service_url}",
     "netplan_removal_excludes=\"${var.netplan_removal_excludes}\"",
     "image_builder_version=${var.ib_version}",
-    "fips_enabled=${var.fips_enabled}",
+    "fips_enabled=${local.fips_enabled}",
     "containerd_fips_url=${local.containerd_fips_url}",
-    "containerd_fips_sha256=${var.fips_enabled ? var.fips_containerd_sha256 : ""}",
+    "containerd_fips_sha256=${local.fips_enabled ? var.fips_containerd_sha256 : ""}",
     "kubernetes_build_metadata=${local.kubernetes_build_metadata}",
-    "kubernetes_coredns_image_repository=${var.fips_enabled ? var.fips_coredns_image_repository : ""}",
-    "kubernetes_etcd_image_tag=${var.fips_enabled ? var.fips_etcd_image_tag : ""}",
+    "kubernetes_coredns_image_repository=${local.fips_enabled ? var.fips_coredns_image_repository : ""}",
+    "kubernetes_etcd_image_tag=${local.fips_enabled ? var.fips_etcd_image_tag : ""}",
   ])
 }

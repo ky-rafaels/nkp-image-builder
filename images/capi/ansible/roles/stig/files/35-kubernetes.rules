@@ -1,0 +1,10 @@
+# Kubernetes node allowances for the STIG's deny-by-default fapolicyd policy
+# (installed by image-builder's stig role).
+#
+# CNI plugins (Cilium, Calico, Multus, ...) install their binaries into
+# /opt/cni/bin at runtime from DaemonSets, so they can't be in the trust
+# database when the image is built. kubelet and the container runtime execute
+# them for every pod sandbox.
+allow perm=any all : dir=/opt/cni/bin/
+# FlexVolume / kubelet plugins installed by storage drivers at runtime.
+allow perm=any all : dir=/usr/libexec/kubernetes/kubelet-plugins/

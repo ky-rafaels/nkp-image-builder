@@ -23,6 +23,23 @@ type Config struct {
 	Catalog  CatalogConfig `json:"catalog"`
 	Features FeatureConfig `json:"features"`
 	FIPS     FIPSConfig    `json:"fips"`
+	STIG     STIGConfig    `json:"stig"`
+}
+
+// STIGConfig controls the "DISA STIG" build option (see
+// images/capi/ansible/roles/stig). A STIG build is always a FIPS build.
+type STIGConfig struct {
+	Enabled bool `json:"enabled"`
+	// Site exceptions added to the built-in Kubernetes ones.
+	ExtraExceptions []STIGException `json:"extraExceptions"`
+	// host:port of the remote log host (V-258149).
+	RemoteSyslog string `json:"remoteSyslog"`
+}
+
+type STIGException struct {
+	Rule   string `json:"rule"`
+	VulnID string `json:"vuln_id,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // FIPSConfig controls the "FIPS 140" build option. Empty source fields fall
@@ -138,7 +155,8 @@ type BuildDefaults struct {
 	// {prefix} ImageNamePrefix, {os} OSOption.ImageNameOS (e.g. ubuntu-24.04),
 	// {version} Kubernetes version without the "v" (e.g. 1.36.1),
 	// {timestamp} UTC build time as YYYYMMDDhhmmss,
-	// {fips} "-fips" for FIPS builds, "" otherwise.
+	// {fips} "-fips" for FIPS builds, "" otherwise,
+	// {stig} "-stig" for DISA STIG builds, "" otherwise.
 	ImageNameTemplate string `json:"imageNameTemplate"`
 	HTTPProxy         string `json:"httpProxy"`
 	HTTPSProxy        string `json:"httpsProxy"`
@@ -157,6 +175,8 @@ type OSOption struct {
 	// FIPSCapable offers the FIPS 140 option for this OS. Only EL9 (RHEL 9,
 	// Rocky 9) is wired up in the build pipeline.
 	FIPSCapable bool `json:"fipsCapable"`
+	// STIGCapable offers DISA STIG hardening (needs FIPSCapable too).
+	STIGCapable bool `json:"stigCapable"`
 	// ImageNameOS is the {os} part of default image names. Derived from ID
 	// when empty: ubuntu-2404 -> ubuntu-24.04, rockylinux-9 -> rockylinux-9.
 	ImageNameOS string `json:"imageNameOS"`

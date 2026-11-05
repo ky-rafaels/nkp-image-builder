@@ -1,0 +1,84 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# DISA STIG hardening of EL9 nodes with the SCAP Security Guide (SSG) "stig"
+# profile, tailored for Kubernetes. Requires FIPS mode (itself a STIG CAT I
+# requirement), which the build enables before provisioning.
+stig_enabled: false
+
+stig_profile: xccdf_org.ssgproject.content_profile_stig
+stig_content_dir: /usr/share/xml/scap/ssg/content
+# Tailoring, exception list and scan reports are kept in the image as
+# evidence for assessors.
+stig_report_dir: /usr/share/image-builder/stig
+
+# Rules a Kubernetes node cannot meet. Each becomes a deselected rule in the
+# tailoring file and an entry in the exceptions document for the ISSM.
+stig_kubernetes_exceptions:
+  - rule: sysctl_net_ipv4_conf_all_forwarding
+    vuln_id: V-257970
+    reason: >-
+      Kubernetes nodes route pod traffic. kubeadm's preflight checks require
+      net.ipv4.ip_forward=1 and every CNI plugin depends on it.
+  - rule: sysctl_net_ipv6_conf_all_forwarding
+    vuln_id: V-257974
+    reason: >-
+      Required for IPv6 and dual-stack pod networking, for the same reason as
+      IPv4 forwarding.
+  - rule: service_firewalld_enabled
+    vuln_id: V-257936
+    reason: >-
+      The CNI plugin (Cilium on NKP) programs the node's packet filtering
+      (iptables/nftables/eBPF) and enforces host and pod network policy;
+      firewalld rewriting the same tables breaks pod networking. Host
+      firewalling is provided by CNI host policies and/or Nutanix Flow.
+  - rule: configured_firewalld_default_deny
+    vuln_id: V-257937
+    reason: See V-257936; firewalld is installed but not active.
+  - rule: firewalld_sshd_port_enabled
+    vuln_id: V-257940
+    reason: See V-257936; firewalld is installed but not active.
+  - rule: package_nfs-utils_removed
+    vuln_id: V-257828
+    reason: >-
+      kubelet mounts NFS-backed PersistentVolumes (e.g. Nutanix Files via the
+      Nutanix CSI driver) with the host's mount.nfs from nfs-utils.
+  - rule: sysctl_user_max_user_namespaces_no_remediation
+    vuln_id: V-257816
+    reason: >-
+      Container runtimes and Kubernetes user-namespaced pods (hostUsers:
+      false) create user namespaces. The STIG permits this when the use is
+      operationally required and documented with the ISSM.
+
+# Site-specific additions: [{rule: <ssg rule id>, vuln_id: V-..., reason: ...}]
+stig_extra_exceptions: []
+
+# Deselected only while provisioning, then applied by the final build step
+# (packer/files/stig/finalize-stig.sh): the build user's NOPASSWD sudo rule is
+# needed by goss, and the user is deleted at shutdown.
+stig_build_phase_deselect:
+  - sudo_remove_nopasswd
+
+# V-258149 (CAT II): remote log host, "host:port" over TCP. Empty leaves it a
+# finding to be met by the site's logging configuration.
+stig_remote_syslog: ""
+# V-257787 (CAT I): GRUB superuser password as a grub2-mkpasswd-pbkdf2 hash
+# (grub.pbkdf2.sha512.…). Empty leaves it a finding.
+stig_grub_password_hash: ""
+
+# Non-RPM executables (the containerd/runc bundle, crictl) are added to the
+# fapolicyd trust database so the STIG's deny-by-default policy lets them run.
+stig_fapolicyd_trusted_dirs:
+  - /usr/local/bin
+  - /usr/local/sbin

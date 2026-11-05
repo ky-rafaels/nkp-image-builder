@@ -77,6 +77,10 @@
       loop_control:
         loop_var: role
       when: custom_role_names != "" or node_custom_roles_post != ""
+    - name: Include stig role
+      ansible.builtin.include_role:
+        name: stig
+      when: stig_enabled | default(false) | bool
     - name: Include sysprep role
       ansible.builtin.include_role:
         name: sysprep

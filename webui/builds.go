@@ -52,6 +52,8 @@ type BuildRequest struct {
 	// FIPS builds a FIPS 140 image: FIPS kernel mode and crypto policy plus
 	// FIPS builds of Kubernetes, containerd and runc.
 	FIPS bool `json:"fips,omitempty"`
+	// STIG hardens the image to the DISA STIG. Implies FIPS.
+	STIG bool `json:"stig,omitempty"`
 
 	// Optional per-build credentials.
 	Credentials *BuildCredentials `json:"credentials,omitempty"`
@@ -117,7 +119,7 @@ var deniedExtraVars = map[string]bool{
 }
 
 // deniedExtraVarPrefixes extends deniedExtraVars to whole families.
-var deniedExtraVarPrefixes = []string{"fips_"}
+var deniedExtraVarPrefixes = []string{"fips_", "stig_"}
 
 // buildWrapper runs `make <target>` in its own process group and turns the
 // pod's SIGTERM (cancel / delete) into a SIGINT for the whole group -- the same
@@ -149,7 +151,7 @@ func (f fieldErrors) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-const defaultImageNameTemplate = "{prefix}{os}{fips}-release-{version}-{timestamp}.qcow2"
+const defaultImageNameTemplate = "{prefix}{os}{fips}{stig}-release-{version}-{timestamp}.qcow2"
 
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
@@ -166,7 +168,7 @@ var reYearMonthOS = regexp.MustCompile(`^(.+-)(\d{2})(\d{2})$`)
 // now is replaced in tests.
 var now = time.Now
 
-func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips bool, t time.Time) string {
+func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips, stig bool, t time.Time) string {
 	tmpl := d.ImageNameTemplate
 	if tmpl == "" {
 		tmpl = defaultImageNameTemplate
@@ -181,6 +183,7 @@ func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips bool,
 		"{version}", strings.TrimPrefix(k8sVersion, "v"),
 		"{timestamp}", t.UTC().Format("20060102150405"),
 		"{fips}", map[bool]string{true: "-fips"}[fips],
+		"{stig}", map[bool]string{true: "-stig"}[stig],
 	).Replace(tmpl)
 }
 
@@ -224,6 +227,16 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	}
 
 	osOpt, ok := cfg.osByID(r.OS)
+	if r.STIG {
+		// FIPS mode is a STIG requirement (V-258230, CAT I).
+		r.FIPS = true
+		switch {
+		case !cfg.STIG.Enabled:
+			errs["stig"] = "DISA STIG builds are not enabled on this service"
+		case ok && !osOpt.STIGCapable:
+			errs["stig"] = osOpt.Label + " does not support DISA STIG builds here; use RHEL 9 or Rocky Linux 9"
+		}
+	}
 	if !ok {
 		errs["os"] = "unsupported operating system"
 	}
@@ -231,7 +244,7 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		errs["kubernetesVersion"] = "must look like v1.36.1"
 	}
 	if r.ImageName == "" && ok && reK8sVersion.MatchString(r.KubernetesVersion) {
-		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, r.FIPS, now())
+		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, r.FIPS, r.STIG, now())
 	}
 	if !reImageName.MatchString(r.ImageName) {
 		errs["imageName"] = "1-80 chars: letters, digits, '.', '_' or '-'"
@@ -382,6 +395,16 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 			vars[k] = v
 		}
 		vars["fips_enabled"] = "true"
+	}
+	if r.STIG {
+		vars["stig_enabled"] = "true"
+		if len(cfg.STIG.ExtraExceptions) > 0 {
+			b, _ := json.Marshal(cfg.STIG.ExtraExceptions)
+			vars["stig_extra_exceptions"] = string(b)
+		}
+		if cfg.STIG.RemoteSyslog != "" {
+			vars["stig_remote_syslog"] = cfg.STIG.RemoteSyslog
+		}
 	}
 	return vars
 }

@@ -25,7 +25,7 @@ build {
   # steps are no-ops when fips_enabled is false.
   provisioner "shell" {
     environment_vars = [
-      "FIPS_ENABLED=${var.fips_enabled}",
+      "FIPS_ENABLED=${local.fips_enabled}",
       "http_proxy=${var.http_proxy}",
       "https_proxy=${var.https_proxy}",
       "no_proxy=${var.no_proxy}",
@@ -35,15 +35,15 @@ build {
   }
 
   provisioner "shell" {
-    execute_command   = var.fips_enabled ? "sudo systemctl reboot" : "true"
+    execute_command   = local.fips_enabled ? "sudo systemctl reboot" : "true"
     inline            = ["true"]
     expect_disconnect = true
   }
 
   provisioner "shell" {
-    environment_vars    = ["FIPS_ENABLED=${var.fips_enabled}"]
+    environment_vars    = ["FIPS_ENABLED=${local.fips_enabled}"]
     execute_command     = "sudo {{.Vars}} -S -E bash '{{.Path}}'"
-    pause_before        = var.fips_enabled ? "30s" : "0s"
+    pause_before        = local.fips_enabled ? "30s" : "0s"
     start_retry_timeout = "15m"
     script              = "./packer/files/fips/verify-fips.sh"
   }
@@ -56,6 +56,14 @@ build {
       "--extra-vars", local.ansible_common_vars,
       "--extra-vars", var.ansible_extra_vars,
       "--extra-vars", var.ansible_user_vars,
+      # JSON so values with spaces/quotes survive; the grub hash is a
+      # sensitive variable, so Packer redacts it from its output.
+      "--extra-vars", jsonencode({
+        stig_enabled            = var.stig_enabled
+        stig_extra_exceptions   = jsondecode(var.stig_extra_exceptions)
+        stig_remote_syslog      = var.stig_remote_syslog
+        stig_grub_password_hash = var.stig_grub_password_hash
+      }),
       "--scp-extra-args=${local.ansible_scp_extra_args}",
     ]
     playbook_file = "./ansible/node.yml"
@@ -82,7 +90,7 @@ build {
       containerd_gvisor_version              = var.containerd_gvisor_version
       containerd_image_pull_progress_timeout = (var.containerd_image_pull_progress_timeout != null ? var.containerd_image_pull_progress_timeout : "")
       containerd_version                     = local.containerd_version
-      fips_enabled                           = var.fips_enabled
+      fips_enabled                           = local.fips_enabled
       kubernetes_build_metadata              = local.kubernetes_build_metadata
       kubernetes_cni_deb_version             = (var.kubernetes_cni_deb_version != null ? var.kubernetes_cni_deb_version : "")
       kubernetes_cni_rpm_version             = split("-", var.kubernetes_cni_rpm_version != null ? var.kubernetes_cni_rpm_version : "")[0]
@@ -94,5 +102,15 @@ build {
       kubernetes_version                     = replace(var.kubernetes_semver, "v", "")
     }
     version = var.goss_version
+  }
+
+  # DISA STIG: deferred rules, runtime checks under fapolicyd, AIDE baseline
+  # and the final scan. Runs last, before shutdown_command deletes the build
+  # user. The build user's NOPASSWD sudo is removed by this step, hence the
+  # password on stdin.
+  provisioner "shell" {
+    environment_vars = ["STIG_ENABLED=${var.stig_enabled}"]
+    execute_command  = "echo '${var.ssh_password}' | sudo -S {{.Vars}} -E bash '{{.Path}}'"
+    script           = "./packer/files/stig/finalize-stig.sh"
   }
 }

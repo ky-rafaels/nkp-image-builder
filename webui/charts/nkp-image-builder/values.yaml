@@ -84,9 +84,10 @@ defaults:
   #   {version}   Kubernetes version without the "v", e.g. 1.36.1
   #   {timestamp} UTC build start time, YYYYMMDDhhmmss
   #   {fips}      "-fips" for FIPS builds, empty otherwise
+  #   {stig}      "-stig" for DISA STIG builds, empty otherwise
   # e.g. nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2
-  #      nkp-rockylinux-9-fips-release-1.36.1-20261105143022.qcow2
-  imageNameTemplate: "{prefix}{os}{fips}-release-{version}-{timestamp}.qcow2"
+  #      nkp-rhel-9-fips-stig-release-1.36.1-20261105143022.qcow2
+  imageNameTemplate: "{prefix}{os}{fips}{stig}-release-{version}-{timestamp}.qcow2"
   httpProxy: ""
   httpsProxy: ""
   noProxy: ""
@@ -94,7 +95,8 @@ defaults:
 # -- What users can pick from. `id` must match packer/nutanix/<id>.json and the
 # `build-nutanix-<id>` make target in images/capi/Makefile. Optional
 # `imageNameOS` overrides the {os} part of the default image name.
-# `fipsCapable` offers the FIPS 140 option for that OS (EL9 only, see `fips`).
+# `fipsCapable` offers the FIPS 140 option for that OS (EL9 only, see `fips`),
+# `stigCapable` the DISA STIG option (EL9 only, see `stig`).
 catalog:
   operatingSystems:
     - id: ubuntu-2204
@@ -106,11 +108,13 @@ catalog:
     - id: rockylinux-9
       label: Rocky Linux 9
       fipsCapable: true
+      stigCapable: true
     - id: rhel-9
       label: RHEL 9
       requiresImageURL: true
       requiresRHSM: true
       fipsCapable: true
+      stigCapable: true
     - id: flatcar
       label: Flatcar
       # packer/nutanix/flatcar.json names a local file, not a URL.
@@ -158,6 +162,26 @@ fips:
   containerdVersion: ""   # default 2.3.1
   containerdURL: ""
   containerdSHA256: ""    # default: sha256 of the 2.3.1 bundle
+
+# -- DISA STIG hardening (implies FIPS). The build applies the SCAP Security
+# Guide "stig" profile (DISA STIG for RHEL 9) with oscap, tailored with the
+# Kubernetes exceptions in images/capi/ansible/roles/stig/defaults/main.yml,
+# keeps fapolicyd/usbguard/auditd/AIDE enforcing, scans the final image and
+# stores results.xml, report.html, tailoring.xml and exceptions.md in the image
+# under /usr/share/image-builder/stig. The scan summary ends the build log.
+#
+# The GRUB password (V-257787, CAT I) is a secret: add a STIG_GRUB_PASSWORD_HASH
+# key (output of `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret.
+stig:
+  enabled: true
+  # host:port of the site's remote log host, TCP (V-258149). Empty leaves an open finding.
+  remoteSyslog: ""
+  # Site-approved exceptions, added to the built-in Kubernetes ones. Rule IDs
+  # are SCAP Security Guide rule names (the build fails on unknown ones).
+  extraExceptions: []
+  #  - rule: encrypt_partitions
+  #    vuln_id: V-257879
+  #    reason: Data at rest is encrypted by Nutanix Data-at-Rest Encryption.
 
 features:
   # Let users enter their own Prism Central / RHSM credentials per build.

@@ -42,6 +42,7 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
 | Source image: Prism Central image | `source_image_uuid` if the value is a UUID, otherwise `source_image_name`. The build boots from that existing image and never modifies or deletes it. |
 | Source image: download URL | `image_url` |
+| DISA STIG hardening (RHEL 9, Rocky 9) | `stig_enabled=true` (implies FIPS), `stig_extra_exceptions` and `stig_remote_syslog` from the chart. See [DISA STIG images](#disa-stig-images). |
 | FIPS 140 mode (RHEL 9, Rocky 9) | `fips_enabled=true` plus the `fips.*` sources from the chart. See [FIPS images](#fips-images). |
 | Proxies, extra packages | `http_proxy`, `https_proxy`, `no_proxy`, `extra_debs`, `extra_rpms` |
 | Extra variables | any other variable in `packer/nutanix/variables.pkr.hcl` except credentials, SSH, naming and custom ansible/post-processor hooks |
@@ -92,6 +93,63 @@ sources through extra variables.
 
 Ubuntu FIPS isn't offered. It needs an Ubuntu Pro token for the FIPS kernel,
 and there is no FIPS-built Kubernetes `.deb` source to install from.
+
+## DISA STIG images
+
+**DISA STIG hardening** (OSes with `stigCapable: true`) always produces a FIPS
+image, because FIPS mode is itself a STIG requirement (V-258230, CAT I). On
+top of that:
+
+1. **Remediation.** Near the end of provisioning, the `stig` Ansible role
+   applies the SCAP Security Guide **DISA STIG profile** for the distribution
+   (`ssg-rhel9-ds.xml` on RHEL, `ssg-rl9-ds.xml` on Rocky) with `oscap
+   --remediate`. It uses a tailoring file that deselects only the rules a
+   Kubernetes node can't meet:
+
+   | Rule | Vuln ID | Why |
+   |---|---|---|
+   | IPv4/IPv6 forwarding off | V-257970, V-257974 | Pods are routed through the node; kubeadm requires `ip_forward=1`. |
+   | firewalld active, default deny, ssh port | V-257936, V-257937, V-257940 | The CNI (Cilium) owns the node's packet filtering; firewalld rewriting the same tables breaks pod networking. |
+   | nfs-utils removed | V-257828 | kubelet needs `mount.nfs` for NFS PersistentVolumes (Nutanix Files). |
+   | user namespaces disabled | V-257816 | Container runtimes and `hostUsers: false` pods use them. The STIG allows this when it's documented. |
+
+   Everything else is enforced, including fapolicyd deny-by-default,
+   usbguard, auditd, AIDE, the DoD login banner, SSH and PAM settings, and the
+   FIPS:STIG crypto policy. The non-RPM containerd/runc binaries are added to
+   the fapolicyd trust database, and `/opt/cni/bin` is allowed so CNI plugins
+   installed at runtime can run.
+2. **Final step**, after goss:
+   * applies the last sudo rule (the build user is removed at shutdown)
+   * starts a container through containerd, the shim and runc with
+     fapolicyd enforcing
+   * checks that untrusted executables are denied and CNI plugins are allowed
+   * rebuilds the AIDE baseline
+   * scans the finished image
+3. **Evidence.** `results.xml`, `report.html`, `tailoring.xml` and
+   `exceptions.md` (each exception with its justification, for your ISSM) are
+   kept in the image at `/usr/share/image-builder/stig/`. The end of the build
+   log lists the score and every open finding by CAT level.
+
+Some findings need a site decision or a different disk image, so expect them
+in the report until you address them:
+
+* **Separate partitions** for `/var`, `/var/log`, `/var/log/audit`, `/tmp`,
+  `/var/tmp` and `/home`. Cloud images have a single partition. Build from a
+  Prism Central source image that was installed with STIG partitioning (see
+  *Source image*).
+* **GRUB password** (V-257787, CAT I). Add `STIG_GRUB_PASSWORD_HASH` (from
+  `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret.
+* **Remote log host** (V-258149). Set `stig.remoteSyslog`.
+* **Disk encryption** (V-257879, CAT I). If your ISSM accepts Nutanix
+  Data-at-Rest Encryption, add it to `stig.extraExceptions` with that
+  justification.
+* **Rocky Linux** always fails "vendor-supported OS" (V-257777, CAT I).
+  DISA publishes the STIG for RHEL 9 only, so use RHEL 9 for an
+  accreditation baseline.
+
+The image covers the operating system STIG. The DISA **Kubernetes** STIG
+(API server, kubelet configuration, and so on) applies to the cluster NKP
+creates, not to the node image.
 
 ## Prerequisites
 

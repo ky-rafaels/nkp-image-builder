@@ -82,10 +82,12 @@ async function loadConfig() {
     el("label", { class: "os-card" },
       el("input", { type: "radio", name: "os", value: o.id, checked: i === 0 }),
       el("span", { class: "os-name" }, o.label,
-        cfg.fips.enabled && o.fipsCapable ? el("span", { class: "tag", title: "FIPS 140 capable" }, "FIPS") : null),
+        cfg.fips.enabled && o.fipsCapable ? el("span", { class: "tag", title: "FIPS 140 capable" }, "FIPS") : null,
+        cfg.stig.enabled && o.stigCapable ? el("span", { class: "tag", title: "DISA STIG capable" }, "STIG") : null),
       el("span", { class: "os-id" }, o.id),
     )));
   $("#fips-option").classList.toggle("hidden", !cfg.fips.enabled);
+  $("#stig-option").classList.toggle("hidden", !cfg.stig.enabled);
 
   $("#k8s-versions").replaceChildren(...cfg.catalog.kubernetesVersions.map((v) => el("option", { value: v })));
 
@@ -115,8 +117,16 @@ function onFormChange() {
   const f = $("#build-form");
   const os = selectedOS();
   if (!os) return;
+  const stigBox = f.stig;
+  stigBox.disabled = !os.stigCapable;
+  if (!os.stigCapable) stigBox.checked = false;
+  $("#stig-hint").textContent = os.stigCapable
+    ? "Applies the DISA STIG profile (SCAP Security Guide) with documented Kubernetes exceptions, scans the result and keeps the report in the image. Requires FIPS."
+    : `Not available for ${os.label}. DISA STIG builds are supported on RHEL 9 and Rocky Linux 9.`;
+  // FIPS mode is a STIG requirement.
   const fipsBox = f.fips;
-  fipsBox.disabled = !os.fipsCapable;
+  fipsBox.disabled = !os.fipsCapable || stigBox.checked;
+  if (stigBox.checked) fipsBox.checked = true;
   if (!os.fipsCapable) fipsBox.checked = false;
   $("#fips-hint").textContent = os.fipsCapable
     ? "FIPS kernel mode and crypto policy, with FIPS builds of Kubernetes, containerd and runc."
@@ -127,7 +137,8 @@ function onFormChange() {
     .replaceAll("{prefix}", d.imageNamePrefix || "")
     .replaceAll("{os}", os.imageNameOS || os.id)
     .replaceAll("{version}", version)
-    .replaceAll("{fips}", fipsSelected() ? "-fips" : "")
+    .replaceAll("{fips}", fipsSelected() || stigSelected() ? "-fips" : "")
+    .replaceAll("{stig}", stigSelected() ? "-stig" : "")
     .replaceAll("{timestamp}", "<timestamp>");
   $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
   // OSes without a usable default image must pick a Prism image or a URL.
@@ -146,6 +157,11 @@ function onFormChange() {
 function fipsSelected() {
   const os = selectedOS();
   return Boolean(state.config.fips.enabled && os?.fipsCapable && $("#build-form").fips.checked);
+}
+
+function stigSelected() {
+  const os = selectedOS();
+  return Boolean(state.config.stig.enabled && os?.stigCapable && $("#build-form").stig.checked);
 }
 
 function sourceMode() {
@@ -185,6 +201,7 @@ function collectRequest() {
     extraRpms: f.extraRpms.value,
   };
   if (fipsSelected()) req.fips = true;
+  if (stigSelected()) req.stig = req.fips = true;
   if (state.config.features.allowExtraVars) {
     const vars = parseExtraVars(f.extraVars.value);
     if (Object.keys(vars).length) req.extraVars = vars;
@@ -273,7 +290,9 @@ async function refreshBuilds() {
                onclick: () => openDetail(b.id),
                onkeydown: (e) => { if (e.key === "Enter") openDetail(b.id); } },
       el("td", {}, statusPill(b.phase)),
-      el("td", { class: "mono" }, b.imageName, b.request?.fips ? el("span", { class: "tag" }, "FIPS") : null),
+      el("td", { class: "mono" }, b.imageName,
+        b.request?.fips ? el("span", { class: "tag" }, "FIPS") : null,
+        b.request?.stig ? el("span", { class: "tag" }, "STIG") : null),
       el("td", {}, osLabel(b.os)),
       el("td", { class: "mono" }, b.request?.kubernetesVersion || "—"),
       el("td", {}, fmtTime(b.startedAt || b.createdAt)),
@@ -293,6 +312,7 @@ function renderDetailHeader(b) {
   const rows = [
     ["Kubernetes", r.kubernetesVersion],
     ["FIPS 140", r.fips ? "Yes" : null],
+    ["DISA STIG", r.stig ? "Yes. Scan report and exceptions in the image at /usr/share/image-builder/stig; summary at the end of the log" : null],
     ["Cluster", r.clusterName],
     ["Subnet", r.subnetName],
     ["VM size", r.cpus ? `${r.cpus} vCPU · ${r.memoryMB} MB · ${r.diskSizeGB} GB` : null],
