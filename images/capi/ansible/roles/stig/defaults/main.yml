@@ -54,6 +54,12 @@ stig_kubernetes_exceptions:
     reason: >-
       kubelet mounts NFS-backed PersistentVolumes (e.g. Nutanix Files via the
       Nutanix CSI driver) with the host's mount.nfs from nfs-utils.
+  - rule: package_gssproxy_removed
+    vuln_id: V-257832
+    reason: >-
+      nfs-utils requires gssproxy (RPM dependency), so removing gssproxy also
+      removes nfs-utils; see V-257828. gssproxy is only used for Kerberos
+      (sec=krb5) NFS mounts.
   - rule: sysctl_user_max_user_namespaces_no_remediation
     vuln_id: V-257816
     reason: >-
