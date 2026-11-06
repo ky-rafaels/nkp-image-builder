@@ -241,6 +241,25 @@
       - "still failing: {{ stig_remediation.stdout | regex_findall('Result\\s+fail') | length }}"
       - "remediation errors: {{ stig_remediation.stdout | regex_findall('Result\\s+error') | length }}"
 
+# The profile installs firewalld (stig_preinstall_packages installs it first),
+# and the RPM enables the service through the EL9 systemd presets. Running in
+# its default "public" zone it rejects kubelet (10250), the API server, etcd
+# and the CNI's overlay/health ports, so nodes never become Ready. With the
+# Kubernetes exception (V-257936) firewalld stays installed for the rules that
+# configure it but must not run. Masked so nothing starts it as a dependency.
+- name: Stop and disable firewalld (the CNI owns packet filtering, V-257936)
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: false
+    state: stopped
+  when: "'service_firewalld_enabled' in stig_all_exceptions | map(attribute='rule')"
+
+- name: Mask firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    masked: true
+  when: "'service_firewalld_enabled' in stig_all_exceptions | map(attribute='rule')"
+
 - name: Check fapolicyd is enforcing
   ansible.builtin.command: systemctl is-active fapolicyd
   changed_when: false

@@ -109,7 +109,7 @@ top of that:
    | Rule | Vuln ID | Why |
    |---|---|---|
    | IPv4/IPv6 forwarding off | V-257970, V-257974 | Pods are routed through the node; kubeadm requires `ip_forward=1`. |
-   | firewalld active, default deny, ssh port | V-257936, V-257937, V-257940 | The CNI (Cilium) owns the node's packet filtering; firewalld rewriting the same tables breaks pod networking. |
+   | firewalld active, default deny, ssh port | V-257936, V-257937, V-257940 | The CNI (Cilium) owns the node's packet filtering; firewalld rewriting the same tables breaks pod networking, and its default zone blocks kubelet, API server and CNI traffic. firewalld is installed and configured but masked. |
    | nfs-utils removed | V-257828 | kubelet needs `mount.nfs` for NFS PersistentVolumes (Nutanix Files). |
    | gssproxy removed | V-257832 | nfs-utils depends on gssproxy, so removing it also removes nfs-utils. |
    | user namespaces disabled | V-257816 | Container runtimes and `hostUsers: false` pods use them. The STIG allows this when it's documented. |

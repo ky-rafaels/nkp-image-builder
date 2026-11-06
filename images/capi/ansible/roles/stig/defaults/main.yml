@@ -41,14 +41,17 @@ stig_kubernetes_exceptions:
     reason: >-
       The CNI plugin (Cilium on NKP) programs the node's packet filtering
       (iptables/nftables/eBPF) and enforces host and pod network policy;
-      firewalld rewriting the same tables breaks pod networking. Host
-      firewalling is provided by CNI host policies and/or Nutanix Flow.
+      firewalld rewriting the same tables breaks pod networking, and its
+      default zone rejects kubelet, API server and CNI overlay traffic.
+      firewalld is installed and configured by the other STIG rules but the
+      service is masked. Host firewalling is provided by CNI host policies
+      and/or Nutanix Flow.
   - rule: configured_firewalld_default_deny
     vuln_id: V-257937
-    reason: See V-257936; firewalld is installed but not active.
+    reason: See V-257936; firewalld is installed but masked.
   - rule: firewalld_sshd_port_enabled
     vuln_id: V-257940
-    reason: See V-257936; firewalld is installed but not active.
+    reason: See V-257936; firewalld is installed but masked.
   - rule: package_nfs-utils_removed
     vuln_id: V-257828
     reason: >-
