@@ -18,13 +18,15 @@
 #      NOPASSWD sudo rule, which goss needed),
 #   2. checks the container runtime still works with fapolicyd enforcing,
 #   3. rebuilds the AIDE baseline from the finished image,
-#   4. scans the image and stores the results in the image as evidence.
+#   4. scans the image and stores the results in the image as evidence,
+#   5. gives the build user password sudo for Packer's shutdown_command.
 # Runs as root. STIG_ENABLED must be "true", otherwise this is a no-op.
 set -o errexit -o nounset -o pipefail
 
 if [[ "${STIG_ENABLED:-false}" != "true" ]]; then
   exit 0
 fi
+: "${BUILD_USER:?BUILD_USER (the Packer SSH user) must be set}"
 
 REPORT_DIR=/usr/share/image-builder/stig
 # shellcheck source=/dev/null
@@ -131,3 +133,16 @@ if failed:
         print("  %-8s %-9s %-55s %s%s" % (cat.get(sev, sev), vid, rid, title[:70], "" if res == "fail" else " [%s]" % res))
 print("Evidence in the image: /usr/share/image-builder/stig/{results.xml,report.html,tailoring.xml,exceptions.md}")
 PY
+
+# sudo_remove_nopasswd (applied above) comments out the build user's whole
+# cloud-init sudoers line ("builder ALL=(ALL) NOPASSWD:ALL"), not just the
+# NOPASSWD tag, so the user has no sudo left. Packer's shutdown_command needs
+# sudo, with the password, to delete the user; it deletes this file as well.
+# Written after the scan so the stored evidence doesn't include it.
+section "Allowing password sudo for ${BUILD_USER} until shutdown deletes the user"
+sudoers_file="/etc/sudoers.d/${BUILD_USER}"
+# sudo skips files in sudoers.d with a "." in the name, so the temp file is inert.
+printf '%s ALL=(ALL) ALL\n' "${BUILD_USER}" >"${sudoers_file}.tmp"
+chmod 0440 "${sudoers_file}.tmp"
+visudo -cf "${sudoers_file}.tmp" >/dev/null
+mv -f "${sudoers_file}.tmp" "${sudoers_file}"

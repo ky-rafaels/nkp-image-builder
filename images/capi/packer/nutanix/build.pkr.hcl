@@ -109,10 +109,14 @@ build {
 
   # DISA STIG: deferred rules, runtime checks under fapolicyd, AIDE baseline
   # and the final scan. Runs last, before shutdown_command deletes the build
-  # user. The build user's NOPASSWD sudo is removed by this step, hence the
-  # password on stdin.
+  # user. This step removes the build user's NOPASSWD sudo and leaves it
+  # password sudo only, hence the password on stdin here and in
+  # shutdown_command.
   provisioner "shell" {
-    environment_vars = ["STIG_ENABLED=${var.stig_enabled}"]
+    environment_vars = [
+      "STIG_ENABLED=${var.stig_enabled}",
+      "BUILD_USER=${var.ssh_username}",
+    ]
     execute_command  = "echo '${var.ssh_password}' | sudo -S {{.Vars}} -E bash '{{.Path}}'"
     script           = "./packer/files/stig/finalize-stig.sh"
   }
