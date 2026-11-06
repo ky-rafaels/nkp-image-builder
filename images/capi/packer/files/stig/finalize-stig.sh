@@ -54,7 +54,7 @@ fi
 
 section "Removing build-only fapolicyd allowances and the goss binary"
 rm -f /etc/fapolicyd/rules.d/36-image-builder-build.rules
-rm -rf /tmp/goss /tmp/goss-* /tmp/goss-spec.yaml
+rm -rf /tmp/goss /tmp/goss-* /tmp/goss-spec.yaml /opt/image-builder
 fagenrules --load
 systemctl restart fapolicyd
 for _ in $(seq 1 30); do systemctl is-active --quiet fapolicyd && break; sleep 1; done
@@ -76,7 +76,9 @@ fi
 # runtime (35-kubernetes.rules) but nothing untrusted elsewhere.
 probe=/opt/cni/bin/.stig-fapolicyd-probe
 cp /usr/bin/true "${probe}"
-denied=/var/tmp/.stig-fapolicyd-probe
+# Not /tmp or /var/tmp: they are mounted noexec, which would deny it without
+# fapolicyd.
+denied=/opt/.stig-fapolicyd-probe
 cp /usr/bin/true "${denied}"
 chmod 0755 "${probe}" "${denied}"
 trap 'rm -f "${probe}" "${denied}"' EXIT
@@ -89,6 +91,12 @@ fi
 rm -f "${probe}" "${denied}"
 trap - EXIT
 echo "OK: containers start, CNI plugin directory allowed, untrusted executables denied."
+# grow-var-lv runs at every node boot (stig-partitions.sh); there is no new
+# space now, so this only proves fapolicyd lets it and its tools run.
+if [[ -x /usr/local/sbin/grow-var-lv ]]; then
+  /usr/local/sbin/grow-var-lv
+  echo "OK: grow-var-lv runs under fapolicyd."
+fi
 
 section "Rebuilding the AIDE baseline"
 aide --init >/dev/null
@@ -128,7 +136,7 @@ print("Results:   " + ", ".join("%s=%d" % kv for kv in sorted(counts.items())))
 cat = {"high": "CAT I", "medium": "CAT II", "low": "CAT III"}
 order = {"high": 0, "medium": 1, "low": 2}
 if failed:
-    print("Open findings (need a site decision, a different disk layout, or a secret):")
+    print("Open findings (need a site decision or a secret):")
     for sev, vid, rid, title, res in sorted(failed, key=lambda f: (order.get(f[0], 3), f[2])):
         print("  %-8s %-9s %-55s %s%s" % (cat.get(sev, sev), vid, rid, title[:70], "" if res == "fail" else " [%s]" % res))
 print("Evidence in the image: /usr/share/image-builder/stig/{results.xml,report.html,tailoring.xml,exceptions.md}")

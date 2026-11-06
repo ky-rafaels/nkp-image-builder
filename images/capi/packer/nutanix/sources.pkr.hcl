@@ -19,7 +19,7 @@ source "nutanix" "node" {
   ssh_password           = var.ssh_password
   ssh_timeout            = "20m"
   ssh_username           = var.ssh_username
-  user_data              = var.user_data
+  user_data              = local.user_data
 
   # Boot disk source, in order of precedence: an existing Prism Central image
   # by UUID, by name, or else a download from image_url. Unused fields are

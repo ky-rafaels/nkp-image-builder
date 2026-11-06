@@ -19,9 +19,21 @@ locals {
   fips_enabled = var.fips_enabled || var.stig_enabled
 
   # Where the goss provisioner puts its binary (the plugin's default path,
-  # made explicit). STIG builds allow exactly this path through fapolicyd
-  # until the final STIG step removes both the rule and the binary.
-  goss_download_path = "/tmp/goss-${var.goss_version}-linux-${var.goss_arch}"
+  # made explicit). STIG builds use /opt/image-builder instead, because the
+  # STIG remediation mounts /tmp noexec before goss runs, and allow exactly
+  # this path through fapolicyd until the final STIG step removes both the
+  # rule and the binary.
+  goss_download_path = var.stig_enabled ? "/opt/image-builder/goss-${var.goss_version}-linux-${var.goss_arch}" : "/tmp/goss-${var.goss_version}-linux-${var.goss_arch}"
+  # STIG builds keep the root partition at the image's size so the rest of
+  # the disk can hold separate /var, /var/log, ... filesystems
+  # (stig-partitions.sh).
+  user_data = var.stig_enabled && var.user_data != "" ? base64encode(join("\n", [
+    trimspace(base64decode(var.user_data)),
+    "growpart:",
+    "  mode: \"off\"",
+    "resize_rootfs: false",
+    "",
+  ])) : var.user_data
   kubernetes_container_registry = local.fips_enabled ? var.fips_kubernetes_container_registry : var.kubernetes_container_registry
   kubernetes_build_metadata     = local.fips_enabled ? var.fips_kubernetes_build_metadata : ""
   containerd_version            = local.fips_enabled ? var.fips_containerd_version : var.containerd_version

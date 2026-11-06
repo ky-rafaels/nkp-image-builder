@@ -276,6 +276,7 @@ func TestSTIG(t *testing.T) {
 		"os not capable": {BuildRequest{OS: "ubuntu-2204", STIG: true}, nil, "stig"},
 		"disabled":       {BuildRequest{OS: "rockylinux-9", STIG: true}, func(c *Config) { c.STIG.Enabled = false }, "stig"},
 		"fips disabled":  {BuildRequest{OS: "rockylinux-9", STIG: true}, func(c *Config) { c.FIPS.Enabled = false }, "fips"},
+		"disk too small": {BuildRequest{OS: "rockylinux-9", STIG: true, DiskSizeGB: 30}, nil, "diskSizeGB"},
 	} {
 		cfg := testConfig()
 		if c.cfg != nil {

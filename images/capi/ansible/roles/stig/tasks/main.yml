@@ -179,6 +179,47 @@
 
 # --- Remediation.
 
+- name: Install packages that other STIG rules depend on
+  ansible.builtin.dnf:
+    name: "{{ stig_preinstall }}"
+    state: present
+    lock_timeout: 60
+  vars:
+    stig_preinstall: >-
+      {{ stig_preinstall_packages | reject('in',
+           stig_all_exceptions | map(attribute='rule')
+           | select('match', '^package_.*_installed$')
+           | map('regex_replace', '^package_(.*)_installed$', '\1') | list) | list }}
+  when: stig_preinstall | length > 0
+
+# The STIG's kernel argument rules (audit=1, pti=on, audit_backlog_limit, ...)
+# are fixed with `grubby --update-kernel=ALL --args=...` and checked in both
+# the boot entries and GRUB_CMDLINE_LINUX in /etc/default/grub. grubby only
+# updates GRUB_CMDLINE_LINUX when it is already set; cloud images such as
+# Rocky's GenericCloud keep everything in GRUB_CMDLINE_LINUX_DEFAULT, so the
+# arguments reach the boot entries but not /etc/default/grub and the rules
+# fail. Move the default kernel's arguments (including fips=1) there first.
+- name: Keep the kernel command line in GRUB_CMDLINE_LINUX
+  ansible.builtin.shell:
+    cmd: |
+      set -o errexit -o nounset -o pipefail
+      f=/etc/default/grub
+      current=$(set +o nounset; . "$f" >/dev/null 2>&1; printf '%s' "${GRUB_CMDLINE_LINUX:-}")
+      if [ -n "$current" ]; then echo "unchanged"; exit 0; fi
+      args=$(grubby --info=DEFAULT | sed -n 's/^args="\(.*\)"$/\1/p')
+      kept=()
+      for a in $args; do
+        # root= and ro are added by grub2-mkconfig; $vars are grubenv references.
+        case "$a" in root=*|ro|rw|\$*) ;; *) kept+=("$a") ;; esac
+      done
+      [ -n "${kept[*]}" ] || { echo "no kernel arguments found in the default boot entry" >&2; exit 1; }
+      sed -i -e '/^[[:space:]]*GRUB_CMDLINE_LINUX=/d' -e '/^[[:space:]]*GRUB_CMDLINE_LINUX_DEFAULT=/d' "$f"
+      printf 'GRUB_CMDLINE_LINUX="%s"\nGRUB_CMDLINE_LINUX_DEFAULT=""\n' "${kept[*]}" >>"$f"
+      echo "changed: GRUB_CMDLINE_LINUX=\"${kept[*]}\""
+    executable: /bin/bash
+  register: stig_grub_cmdline
+  changed_when: stig_grub_cmdline.stdout is search('^changed')
+
 - name: Apply the DISA STIG profile (this takes several minutes)
   ansible.builtin.command: >-
     oscap xccdf eval --remediate
@@ -187,8 +228,8 @@
     --results {{ stig_report_dir }}/remediation-results.xml
     {{ stig_datastream }}
   register: stig_remediation
-  # 0: all pass, 2: some rules still fail (e.g. partitioning, which needs a
-  # different disk layout); anything else is an error.
+  # 0: all pass, 2: some rules still fail (e.g. ones that need a site
+  # decision or a secret); anything else is an error.
   failed_when: stig_remediation.rc not in [0, 2]
   changed_when: true
 

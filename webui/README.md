@@ -119,6 +119,30 @@ top of that:
    FIPS:STIG crypto policy. The non-RPM containerd/runc binaries are added to
    the fapolicyd trust database, and `/opt/cni/bin` is allowed so CNI plugins
    installed at runtime can run.
+   **Disk layout.** The STIG requires separate filesystems for `/var`,
+   `/var/log`, `/var/log/audit`, `/var/tmp`, `/home` and `/tmp`. Cloud
+   images have a single XFS root partition, and XFS can't shrink. So a STIG
+   build stops cloud-init from growing the root partition and puts an LVM
+   volume group (`vg_node`) in the rest of the build disk before the FIPS
+   reboot:
+
+   | Mount | Size | STIG mount options (set by the remediation) |
+   |---|---|---|
+   | `/var/log` | 8 GiB (kubelet keeps container logs in `/var/log/pods`) | nodev, nosuid, noexec |
+   | `/var/log/audit` | 4 GiB | nodev, nosuid, noexec |
+   | `/var/tmp` | 2 GiB | nodev, nosuid, noexec |
+   | `/home` | 1 GiB | nodev, nosuid, noexec |
+   | `/tmp` | 2 GiB | nodev, nosuid, noexec |
+   | `/var` | the rest, at least 10 GiB | nodev |
+
+   * **Disk size.** STIG builds need a disk of at least 40 GB.
+   * **Nodes.** containerd, kubelet and etcd data lives on `/var`. Nodes are
+     cloned onto disks larger than the image, and `grow-var-lv.service`
+     grows `/var` into the extra space at boot.
+   * **Changing the sizes.** Change the Packer variable `stig_partition_sizes`.
+   * **Already-partitioned source image.** If the Prism Central source image
+     already has these mounts (for example, one installed with a STIG
+     kickstart), the build leaves them as they are.
 2. **Final step**, after goss:
    * applies the last sudo rule (the build user is removed at shutdown)
    * starts a container through containerd, the shim and runc with
@@ -134,10 +158,6 @@ top of that:
 Some findings need a site decision or a different disk image, so expect them
 in the report until you address them:
 
-* **Separate partitions** for `/var`, `/var/log`, `/var/log/audit`, `/tmp`,
-  `/var/tmp` and `/home`. Cloud images have a single partition. Build from a
-  Prism Central source image that was installed with STIG partitioning (see
-  *Source image*).
 * **GRUB password** (V-257787, CAT I). Add `STIG_GRUB_PASSWORD_HASH` (from
   `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret.
 * **Remote log host** (V-258149). Set `stig.remoteSyslog`.

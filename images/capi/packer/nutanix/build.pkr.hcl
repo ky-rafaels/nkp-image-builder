@@ -34,6 +34,20 @@ build {
     script          = "./packer/files/fips/enable-fips.sh"
   }
 
+  # DISA STIG: separate /var, /var/log, /var/log/audit, /var/tmp, /home and
+  # /tmp filesystems, mounted by the reboot below. No-op unless stig_enabled.
+  provisioner "shell" {
+    environment_vars = [
+      "STIG_ENABLED=${var.stig_enabled}",
+      "STIG_PARTITION_SIZES=${var.stig_partition_sizes}",
+      "http_proxy=${var.http_proxy}",
+      "https_proxy=${var.https_proxy}",
+      "no_proxy=${var.no_proxy}",
+    ]
+    execute_command = "sudo {{.Vars}} -S -E bash '{{.Path}}' create"
+    script          = "./packer/files/stig/stig-partitions.sh"
+  }
+
   provisioner "shell" {
     execute_command   = local.fips_enabled ? "sudo systemctl reboot" : "true"
     inline            = ["true"]
@@ -46,6 +60,15 @@ build {
     pause_before        = local.fips_enabled ? "30s" : "0s"
     start_retry_timeout = "15m"
     script              = "./packer/files/fips/verify-fips.sh"
+  }
+
+  provisioner "shell" {
+    environment_vars = [
+      "STIG_ENABLED=${var.stig_enabled}",
+      "BUILD_USER=${var.ssh_username}",
+    ]
+    execute_command = "sudo {{.Vars}} -S -E bash '{{.Path}}' finish"
+    script          = "./packer/files/stig/stig-partitions.sh"
   }
 
   provisioner "ansible" {

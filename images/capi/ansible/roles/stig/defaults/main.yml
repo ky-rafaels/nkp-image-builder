@@ -93,3 +93,14 @@ stig_fapolicyd_trusted_dirs:
 # goss binary). Allowed by exact path in a build-only rule file that
 # packer/files/stig/finalize-stig.sh deletes before the final scan.
 stig_fapolicyd_build_allow_paths: []
+
+# Packages the STIG profile itself installs that other STIG rules depend on.
+# oscap decides which rules apply before it remediates anything, so a rule
+# that needs a package the same pass installs is skipped as "notapplicable"
+# and then fails the final scan (e.g. configure_usbguard_auditbackend,
+# V-258037). Installing them first lets one remediation pass fix them all.
+# A package is skipped if its package_<name>_installed rule is an exception.
+stig_preinstall_packages:
+  - usbguard
+  - postfix
+  - firewalld

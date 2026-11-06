@@ -170,6 +170,9 @@ fips:
 # stores results.xml, report.html, tailoring.xml and exceptions.md in the image
 # under /usr/share/image-builder/stig. The scan summary ends the build log.
 #
+# STIG builds carve separate /var, /var/log, /var/log/audit, /var/tmp, /home
+# and /tmp filesystems out of the build disk, so they need diskSizeGB >= 40.
+#
 # The GRUB password (V-257787, CAT I) is a secret: add a STIG_GRUB_PASSWORD_HASH
 # key (output of `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret.
 stig:

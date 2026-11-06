@@ -153,6 +153,10 @@ func (f fieldErrors) Error() string {
 
 const defaultImageNameTemplate = "{prefix}{os}{fips}{stig}-release-{version}-{timestamp}.qcow2"
 
+// Smallest build disk for a DISA STIG image: the cloud image's ~10 GB root
+// plus the stig_partition_sizes volumes and at least 10 GB for /var.
+const minSTIGDiskSizeGB = 40
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p) {
@@ -263,6 +267,10 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	}
 	if r.DiskSizeGB < 10 || r.DiskSizeGB > 2048 {
 		errs["diskSizeGB"] = "must be between 10 and 2048"
+	} else if r.STIG && r.DiskSizeGB < minSTIGDiskSizeGB {
+		// The ~10 GB image plus separate /var, /var/log, /var/log/audit,
+		// /var/tmp, /home and /tmp volumes (packer/files/stig/stig-partitions.sh).
+		errs["diskSizeGB"] = fmt.Sprintf("DISA STIG builds need at least %d GB for the separate STIG filesystems", minSTIGDiskSizeGB)
 	}
 	if r.SourceImageURL != "" {
 		u, err := url.Parse(r.SourceImageURL)

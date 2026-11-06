@@ -724,3 +724,9 @@ variable "stig_grub_password_hash" {
   default     = env("STIG_GRUB_PASSWORD_HASH")
   sensitive   = true
 }
+
+variable "stig_partition_sizes" {
+  type        = string
+  description = "Sizes of the separate STIG filesystems created in the build disk (/var gets the rest, at least 10 GiB). kubelet keeps container logs in /var/log."
+  default     = "var_log=8G var_log_audit=4G var_tmp=2G home=1G tmp=2G"
+}
