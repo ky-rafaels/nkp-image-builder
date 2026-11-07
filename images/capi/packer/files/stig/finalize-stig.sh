@@ -72,25 +72,42 @@ if [[ -n "${image}" ]]; then
 else
   echo "No kube-proxy image found; skipping the container start test." >&2
 fi
-# An unprivileged process may run a plugin dropped into /opt/cni/bin at
-# runtime (35-kubernetes.rules) but nothing untrusted elsewhere.
-probe=/opt/cni/bin/.stig-fapolicyd-probe
-cp /usr/bin/true "${probe}"
+# An unprivileged process may run executables dropped at runtime into the
+# directories 35-kubernetes.rules allows (CNI plugins, kubelet credential
+# providers) but nothing untrusted elsewhere.
+allowed_dirs=(/opt/cni/bin /etc/kubernetes/image-credential-provider)
+created_dirs=()
+probes=()
+for d in "${allowed_dirs[@]}"; do
+  if [[ ! -d "${d}" ]]; then
+    mkdir -p "${d}"
+    created_dirs+=("${d}")
+  fi
+  probes+=("${d}/.stig-fapolicyd-probe")
+done
 # Not /tmp or /var/tmp: they are mounted noexec, which would deny it without
 # fapolicyd.
 denied=/opt/.stig-fapolicyd-probe
-cp /usr/bin/true "${denied}"
-chmod 0755 "${probe}" "${denied}"
-trap 'rm -f "${probe}" "${denied}"' EXIT
-setpriv --reuid=65534 --regid=65534 --clear-groups "${probe}" ||
-  { echo "fapolicyd blocks executables in /opt/cni/bin; CNI plugins would not run" >&2; exit 1; }
+cleanup_probes() {
+  rm -f "${probes[@]}" "${denied}"
+  for d in "${created_dirs[@]}"; do rmdir "${d}" 2>/dev/null || true; done
+}
+trap cleanup_probes EXIT
+for p in "${probes[@]}" "${denied}"; do
+  cp /usr/bin/true "${p}"
+  chmod 0755 "${p}"
+done
+for p in "${probes[@]}"; do
+  setpriv --reuid=65534 --regid=65534 --clear-groups "${p}" ||
+    { echo "fapolicyd blocks executables in ${p%/*}; Kubernetes would not run them" >&2; exit 1; }
+done
 if setpriv --reuid=65534 --regid=65534 --clear-groups "${denied}" 2>/dev/null; then
   echo "fapolicyd allowed an untrusted executable; deny-by-default is not in effect" >&2
   exit 1
 fi
-rm -f "${probe}" "${denied}"
+cleanup_probes
 trap - EXIT
-echo "OK: containers start, CNI plugin directory allowed, untrusted executables denied."
+echo "OK: containers start, CNI plugin and credential provider directories allowed, untrusted executables denied."
 # grow-var-lv runs at every node boot (stig-partitions.sh); there is no new
 # space now, so this only proves fapolicyd lets it and its tools run.
 if [[ -x /usr/local/sbin/grow-var-lv ]]; then

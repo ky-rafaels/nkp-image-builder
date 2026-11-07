@@ -8,3 +8,9 @@
 allow perm=any all : dir=/opt/cni/bin/
 # FlexVolume / kubelet plugins installed by storage drivers at runtime.
 allow perm=any all : dir=/usr/libexec/kubernetes/kubelet-plugins/
+# Kubelet image credential providers. NKP (CAREN) installs them at node
+# bootstrap and the kubelet runs dynamic-credential-provider for every image
+# pull, which in turn runs static-/ecr-/gcr-/acr-credential-provider. Without
+# this the second step is denied ("fork/exec ...: operation not permitted")
+# and images are pulled without registry credentials.
+allow perm=any all : dir=/etc/kubernetes/image-credential-provider/

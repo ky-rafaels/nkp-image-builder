@@ -126,6 +126,7 @@ build {
       kubernetes_rpm_version                 = split("-", var.kubernetes_rpm_version)[0]
       kubernetes_source_type                 = var.kubernetes_source_type
       kubernetes_version                     = replace(var.kubernetes_semver, "v", "")
+      pause_image                            = var.pause_image
     }
     version = var.goss_version
   }

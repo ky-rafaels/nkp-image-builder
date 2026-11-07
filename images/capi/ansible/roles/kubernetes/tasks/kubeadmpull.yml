@@ -39,6 +39,23 @@
 - name: Kubeadm pull images
   ansible.builtin.command: kubeadm config images pull --config /etc/kubeadm.yml --cri-socket {{ containerd_cri_socket }}
 
+# containerd starts every pod sandbox from pause_image (`sandbox` in its
+# config), not from kubeadm's imageRepository. When kubernetes_container_registry
+# isn't registry.k8s.io (FIPS builds use docker.io/mesosphere) the pull above
+# fetches a different pause reference, and a node that can't reach
+# pause_image's registry leaves every pod, host-network ones included, in
+# ContainerCreating (FailedCreatePodSandBox) and never becomes Ready.
+- name: Pull the containerd sandbox (pause) image
+  ansible.builtin.command: >-
+    crictl --runtime-endpoint unix://{{ containerd_cri_socket }}
+    --image-endpoint unix://{{ containerd_cri_socket }}
+    pull {{ pause_image }}
+  register: kubernetes_pause_pull
+  retries: 3
+  delay: 10
+  until: kubernetes_pause_pull is succeeded
+  changed_when: true
+
 - name: Delete kubeadm config
   ansible.builtin.file:
     path: /etc/kubeadm.yml

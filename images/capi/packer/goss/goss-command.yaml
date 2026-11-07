@@ -192,6 +192,14 @@ command:
     timeout: 0
     stdout: ["coredns", "etcd", "kube-apiserver", "kube-controller-manager", "kube-proxy", "kube-scheduler", "pause"]
 {{end}}
+{{if index .Vars "pause_image"}}
+# The exact sandbox image containerd is configured with must be in the image
+# (a pause image from another registry does not count). `index` because goss
+# fails on missing keys and not every provider passes pause_image.
+  crictl inspecti -q {{ index .Vars "pause_image" }}:
+    exit-status: 0
+    timeout: 0
+{{end}}
 {{end}}
 {{if and (eq .Vars.kubernetes_source_type "http") (eq .Vars.kubernetes_cni_source_type "http") (not .Vars.kubernetes_load_additional_imgs)}}
 # The second last pipe of awk is to take out arch from kube-apiserver-amd64 (i.e. amd64 or any other arch)
