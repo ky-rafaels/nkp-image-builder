@@ -358,14 +358,17 @@ variable "containerd_image_pull_progress_timeout" {
   type    = string
   default = ""
 }
+# containerd/runc are pinned to what NKP itself ships (containerd
+# 2.3.1-d2iq.1 bundles, which are upstream v2.3.1 + runc v1.4.2) so non-FIPS
+# images match NKP's own node images. Keep in step with fips_containerd_version.
 variable "containerd_version" {
   type        = string
   description = "containerd version to install."
-  default     = "2.3.2"
+  default     = "2.3.1"
 }
 variable "runc_version" {
   type    = string
-  default = "1.4.3"
+  default = "1.4.2"
 }
 # Real default lives in packer/config/ppc64le/containerd.json; empty on other archs.
 variable "containerd_sha256" {

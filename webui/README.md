@@ -51,6 +51,14 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 
 The rendered var-file is shown in each build's detail view.
 
+The form doesn't set the container runtime. Every image gets the same
+containerd as NKP's own node images, whatever the Kubernetes version:
+upstream containerd 2.3.1 and runc 1.4.2 (`packer/config/containerd.json`).
+FIPS images get the FIPS 2.3.1 bundle instead (see [FIPS images](#fips-images)).
+An extra `containerd_version` must be one the bundled `containerd.service`
+supports (`containerd_service_template_versions` in the containerd role,
+currently 2.3.1 and 2.3.2), or the build fails.
+
 ## FIPS images
 
 Ticking **FIPS 140 mode** (offered for OSes with `fipsCapable: true`, by

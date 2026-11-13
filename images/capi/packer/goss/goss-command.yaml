@@ -126,7 +126,7 @@ command:
     stderr: []
     timeout: 0
 {{end}}
-  # Upstream releases report "v2.3.2"; vendor builds (e.g. the FIPS bundle's
+  # Upstream releases report "v2.3.1"; vendor builds (e.g. the FIPS bundle's
   # "2.3.1-d2iq-fips.1") may omit the "v", so strip it only when present.
   PATH=/opt/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin containerd --version | awk -F' ' '{v=$3; sub(/^v/, "", v); print v}':
     exit-status: 0
