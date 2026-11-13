@@ -39,6 +39,20 @@ command:
     stdout: ["+{{ .Vars.kubernetes_build_metadata }}"]
     timeout: 0
 {{end}}
+{{if eq (printf "%v" .Vars.gpu_enabled) "true"}}
+  NVIDIA driver drives the attached GPU:
+    exec: nvidia-smi -L
+    exit-status: 0
+    stdout: ["/GPU 0: /"]
+    timeout: 0
+  NVIDIA kernel module for the default kernel:
+    exec: >-
+      bash -c 'k=$(if command -v grubby >/dev/null 2>&1; then grubby --default-kernel | sed "s|.*/vmlinuz-||";
+      else ls -1 /boot/vmlinuz-* | sed "s|^/boot/vmlinuz-||" | sort -V | tail -n 1; fi);
+      modinfo -k "$k" -F version nvidia'
+    exit-status: 0
+    timeout: 0
+{{end}}
 {{if eq .Vars.immutable_data_partition "true"}}
   test "$(blkid -s LABEL -o value "$(findmnt -n --target "{{.Vars.immutable_data_partition_mount}}" --output SOURCE)")" = "{{.Vars.immutable_data_partition_label}}" && test "$(findmnt -n --target "{{.Vars.immutable_data_partition_mount}}" --output FSTYPE)" = "{{.Vars.immutable_data_partition_fstype}}":
     exit-status: 0

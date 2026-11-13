@@ -1,0 +1,65 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# First pass of a build with a GPU attached to the build VM (gpu_enabled):
+# upgrade the OS with the same setup role (repos, mirrors, RHSM, EPEL) that
+# node.yml runs, and keep nouveau off the GPU. The build then reboots, so
+# node.yml installs the NVIDIA driver (roles/gpu, install.yml) on the newest
+# kernel and can load it and check it against the GPU without a reboot in
+# the middle of the playbook. Does nothing, without connecting, when
+# gpu_enabled is false.
+---
+- name: Prepare the build VM for its attached GPU
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    node_ansible_tmpdir: ""
+    node_environment:
+      http_proxy: "{{ http_proxy | default('') }}"
+      https_proxy: "{{ https_proxy | default('') }}"
+      no_proxy: "{{ no_proxy | default('') }}"
+      HTTP_PROXY: "{{ http_proxy | default('') }}"
+      HTTPS_PROXY: "{{ https_proxy | default('') }}"
+      NO_PROXY: "{{ no_proxy | default('') }}"
+      PYTHONPATH: "{{ python_path }}"
+    node_tmpdir_environment:
+      TMPDIR: "{{ node_ansible_tmpdir }}"
+
+  tasks:
+    - name: Skip unless a GPU is attached to the build VM
+      ansible.builtin.meta: end_play
+      when: not (gpu_enabled | default(false) | bool)
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Upgrade the OS
+      ansible.builtin.include_role:
+        name: setup
+      vars:
+        rpms: []
+        debs: []
+
+    - name: Keep nouveau off the GPU
+      ansible.builtin.include_role:
+        name: gpu
+        tasks_from: prepare
+
+  environment: >-
+    {{
+      node_environment | combine(node_tmpdir_environment)
+      if node_ansible_tmpdir | length > 0
+      else node_environment
+    }}

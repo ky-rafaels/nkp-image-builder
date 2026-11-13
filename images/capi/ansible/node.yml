@@ -45,6 +45,13 @@
     - name: Include node role
       ansible.builtin.include_role:
         name: node
+    # After the node role's setup dependency has upgraded the OS, so the
+    # driver is built for the kernel the image boots (see gpu-prepare.yml).
+    - name: Include GPU driver tasks for a GPU attached to the build VM
+      ansible.builtin.include_role:
+        name: gpu
+        tasks_from: install
+      when: gpu_enabled | default(false) | bool
     - name: Include providers role
       ansible.builtin.include_role:
         name: providers

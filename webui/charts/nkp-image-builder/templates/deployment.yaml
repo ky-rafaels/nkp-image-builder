@@ -53,6 +53,19 @@ spec:
                   name: {{ include "nkpib.authSecretName" . }}
                   key: password
             {{- end }}
+            {{- if and .Values.gpu.enabled .Values.gpu.discovery }}
+            # GPU discovery lists the build cluster's GPUs from Prism Central.
+            {{- range $key := list "NUTANIX_ENDPOINT" "NUTANIX_PORT" "NUTANIX_INSECURE" "NUTANIX_USERNAME" "NUTANIX_PASSWORD" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nkpib.nutanixSecretName" $ }}
+                  key: {{ $key }}
+                  {{- if has $key (list "NUTANIX_PORT" "NUTANIX_INSECURE") }}
+                  optional: true
+                  {{- end }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080

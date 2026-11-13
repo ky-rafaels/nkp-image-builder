@@ -36,7 +36,7 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 |---|---|
 | Operating system | make target `build-nutanix-<id>` (`packer/nutanix/<id>.json`) |
 | Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y-1.1`, `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0` |
-| Image name | `image_name` (also the build VM name). Blank uses `defaults.imageNameTemplate`, by default `nkp-<os>-release-<version>-<UTC timestamp>.qcow2`, e.g. `nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2` |
+| Image name | `image_name` (also the build VM name). Blank uses `defaults.imageNameTemplate`, by default `nkp-<os>[-fips][-stig][-gpu\|-vgpu]-release-<version>-<UTC timestamp>.qcow2`, e.g. `nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2` |
 | Cluster / subnet | `nutanix_cluster_name` / `nutanix_subnet_name` |
 | vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb` |
 | Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
@@ -44,6 +44,7 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Source image: download URL | `image_url` |
 | DISA STIG hardening (RHEL 9, Rocky 9) | `stig_enabled=true` (implies FIPS), `stig_extra_exceptions` and `stig_remote_syslog` from the chart. See [DISA STIG images](#disa-stig-images). |
 | FIPS 140 mode (RHEL 9, Rocky 9) | `fips_enabled=true` plus the `fips.*` sources from the chart. See [FIPS images](#fips-images). |
+| Attach a GPU (Ubuntu, RHEL 9, Rocky 9) | `nutanix_gpu_name`, plus the `gpu.nvidia.*` driver settings from the chart. See [GPU images](#gpu-images). |
 | Proxies, extra packages | `http_proxy`, `https_proxy`, `no_proxy`, `extra_debs`, `extra_rpms` |
 | Extra variables | any other variable in `packer/nutanix/variables.pkr.hcl` except credentials, SSH, naming and custom ansible/post-processor hooks |
 | Credential override | per-build Secret: `NUTANIX_ENDPOINT/PORT/INSECURE/USERNAME/PASSWORD`, `RHSM_USER/PASS` |
@@ -93,6 +94,60 @@ sources through extra variables.
 
 Ubuntu FIPS isn't offered. It needs an Ubuntu Pro token for the FIPS kernel,
 and there is no FIPS-built Kubernetes `.deb` source to install from.
+
+## GPU images
+
+Ticking **Attach a GPU** (offered for OSes with `gpuCapable: true`: Ubuntu,
+RHEL 9 and Rocky Linux 9) builds a node image with the NVIDIA driver baked in,
+checked against a real GPU:
+
+* **Picking the GPU.** The form lists the GPUs and vGPU profiles on the build
+  cluster's hosts in Prism Central, with how many are free. Pick one that is
+  free; the Nutanix Packer plugin attaches it to the build VM by name
+  (`nutanix_gpu_name`). Before a build starts, the service checks the GPU is
+  on that cluster, is NVIDIA, and has one free. With `gpu.discovery: false`,
+  or when Prism Central can't be reached, type the name instead.
+* **Driver.**
+  * *Passthrough GPUs* get NVIDIA's data center driver, branch
+    `gpu.nvidia.driverBranch` (default 580, a long-term support branch), with
+    the open kernel modules (set `openKernelModules: false` for P4, P40, P100
+    and V100). Ubuntu installs it from the Ubuntu archive with `ubuntu-drivers
+    --gpgpu`, using Canonical's signed, prebuilt kernel modules. RHEL/Rocky
+    install the `nvidia-driver:<branch>-open` module stream's compute-only
+    packages from NVIDIA's CUDA repo (`gpu.nvidia.rpmRepo` to mirror it) and
+    build the module with DKMS (from EPEL).
+  * *vGPU profiles* get NVIDIA's vGPU guest driver. Only the NVIDIA Licensing
+    Portal distributes it, so put it on a mirror and set
+    `gpu.nvidia.vgpuDriver` (a `.run` for every OS, or an `.rpm` for RHEL/Rocky
+    and a `.deb` for Ubuntu). Its version must be supported by the AHV hosts'
+    vGPU manager. To license vGPUs from the image, add an
+    `NVIDIA_VGPU_LICENSE_TOKEN` key (the NLS client configuration token) to the
+    Nutanix credentials Secret; it is written to
+    `/etc/nvidia/ClientConfigToken/` and `nvidia-gridd` is enabled.
+* **Order of the build.** After the FIPS/STIG preparation the build upgrades
+  the OS, blocks nouveau and reboots into the newest kernel
+  (`ansible/gpu-prepare.yml`), then checks the GPU is on the PCI bus. Next it
+  installs the driver for the kernel the image boots, loads it, and fails
+  unless `nvidia-smi` sees the GPU (`roles/gpu`, `install.yml`). goss checks
+  `nvidia-smi` again at the end. `nvidia-persistenced` is enabled.
+* **DISA STIG.** Driver files must come from packages, because fapolicyd
+  trusts only packaged files. The data center driver always does; vGPU STIG
+  builds need `vgpuDriver.rpm`.
+* **UEFI.** GPUs with large BARs (A100, H100, ...) need UEFI. Add
+  `boot_type=uefi` to the extra variables (Rocky Linux 9 already uses UEFI),
+  and boot the nodes with UEFI too.
+* **Naming.** Default image names gain `-gpu` or `-vgpu`, e.g.
+  `nkp-ubuntu-24.04-gpu-release-1.36.1-<timestamp>.qcow2`.
+
+Flatcar isn't offered. Its NVIDIA drivers are systemd-sysext images (see
+`ansible/roles/gpu/README.md`), not something the build can install and check
+this way.
+
+To use the image, give the GPU workers the same GPU in their
+`NutanixMachineTemplate` (`spec.template.spec.gpus: [{type: name, name:
+"<GPU name>"}]`). The driver is already on the node, so deploy the NVIDIA GPU
+Operator with `driver.enabled=false`. It still installs the container toolkit
+and device plugin.
 
 ## DISA STIG images
 
@@ -176,6 +231,8 @@ creates, not to the node image.
 
 * A Kubernetes cluster to run the service, such as the NKP management cluster.
 * A registry the cluster can pull from.
+* Network access from the UI pod to Prism Central on 9440, if GPU discovery
+  is on (`gpu.discovery`).
 * Network access from the build pods:
   * Prism Central on 9440.
   * **SSH (22) to the build VM's subnet.** Ansible connects to the VM directly
@@ -266,6 +323,10 @@ supports.
   authenticating proxy (oauth2-proxy, an ingress with SSO).
 * The UI's ServiceAccount can create, update and delete Secrets in its namespace
   (for per-build credential overrides), but it cannot read or list them.
+* With GPU discovery on (`gpu.discovery`, the default when `gpu.enabled`), the
+  UI pod gets the Prism Central credentials as environment variables, to list
+  the build cluster's GPUs. Turn discovery off to keep them out of the UI pod;
+  users then type the GPU name.
 * Build pods run as non-root with all capabilities dropped and no API token.
 * Extra Packer variables go through a deny-list that blocks credentials, SSH
   settings, `custom_post_processor_command` and custom ansible roles. Set

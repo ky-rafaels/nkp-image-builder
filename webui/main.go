@@ -33,6 +33,9 @@ type server struct {
 	builds    *Builds
 	log       *slog.Logger
 	fipsCheck fipsRepoChecker
+	// gpus lists the build cluster's GPUs from Prism Central; nil when GPU
+	// discovery is off or has no credentials.
+	gpus gpuLister
 }
 
 func main() {
@@ -61,6 +64,13 @@ func main() {
 	}
 
 	s := &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: log, fipsCheck: checkFIPSRepo}
+	if cfg.GPU.Enabled && cfg.GPU.Discovery {
+		if pc, err := newPrismClientFromEnv(); err != nil {
+			log.Warn("GPU discovery off: users type the GPU name instead", "err", err)
+		} else {
+			s.gpus = pc
+		}
+	}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -100,6 +110,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /api/config", s.handleConfig)
+	mux.HandleFunc("GET /api/gpus", s.handleGPUs)
 	mux.HandleFunc("GET /api/builds", s.handleList)
 	mux.HandleFunc("POST /api/builds", s.handleCreate)
 	mux.HandleFunc("GET /api/builds/{id}", s.handleGet)
@@ -174,10 +185,23 @@ type configResponse struct {
 	Features      FeatureConfig `json:"features"`
 	FIPS          fipsInfo      `json:"fips"`
 	STIG          stigInfo      `json:"stig"`
+	GPU           gpuInfo       `json:"gpu"`
 }
 
 type stigInfo struct {
 	Enabled bool `json:"enabled"`
+}
+
+// gpuInfo is the part of GPUConfig the UI needs; driver URLs stay private.
+type gpuInfo struct {
+	Enabled bool `json:"enabled"`
+	// Discovery: the form can list the cluster's GPUs from Prism Central.
+	Discovery bool `json:"discovery"`
+	// VGPUDriver says which vGPU guest driver packages are configured
+	// (run, rpm, deb): the form only offers vGPU profiles for an OS that has
+	// one, and only the rpm for DISA STIG builds.
+	VGPUDriver   map[string]bool `json:"vgpuDriver"`
+	DriverBranch string          `json:"driverBranch"`
 }
 
 // fipsInfo is the part of FIPSConfig the UI needs; source URLs stay private.
@@ -201,6 +225,16 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 			ImageRepository: s.cfg.FIPS.ImageRepository(),
 		},
 		STIG: stigInfo{Enabled: s.cfg.STIG.Enabled},
+		GPU: gpuInfo{
+			Enabled:   s.cfg.GPU.Enabled,
+			Discovery: s.discoveryEnabled(),
+			VGPUDriver: map[string]bool{
+				"run": s.cfg.GPU.NVIDIA.VGPUDriver.Run.URL != "",
+				"rpm": s.cfg.GPU.NVIDIA.VGPUDriver.RPM.URL != "",
+				"deb": s.cfg.GPU.NVIDIA.VGPUDriver.DEB.URL != "",
+			},
+			DriverBranch: s.cfg.GPU.NVIDIA.Branch(),
+		},
 	})
 }
 
@@ -231,7 +265,14 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	if fe := s.fipsPreflight(r.Context(), &req); fe != nil {
+	fe := s.fipsPreflight(r.Context(), &req)
+	for k, v := range s.gpuPreflight(r.Context(), &req) {
+		if fe == nil {
+			fe = fieldErrors{}
+		}
+		fe[k] = v
+	}
+	if fe != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation failed", fe)
 		return
 	}
@@ -241,8 +282,12 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error(), nil)
 		return
 	}
+	gpu := ""
+	if req.GPU != nil {
+		gpu = req.GPU.Name + " (" + req.GPU.Mode + ")"
+	}
 	s.log.Info("build created", "id", b.ID, "os", req.OS, "kubernetes", req.KubernetesVersion,
-		"image", req.ImageName, "cluster", req.ClusterName, "remote", r.RemoteAddr)
+		"image", req.ImageName, "cluster", req.ClusterName, "gpu", gpu, "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusCreated, b)
 }
 

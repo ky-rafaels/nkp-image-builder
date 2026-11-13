@@ -31,5 +31,6 @@ data:
       "features" .Values.features
       "fips" (.Values.fips | default dict)
       "stig" (.Values.stig | default dict)
+      "gpu" (.Values.gpu | default dict)
     }}
     {{- $cfg | toPrettyJson | nindent 4 }}

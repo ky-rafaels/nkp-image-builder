@@ -8,6 +8,9 @@ const state = {
   builds: [],
   detailId: null,
   logAbort: null,
+  // GPUs on the build cluster, from Prism Central (GET /api/gpus).
+  gpus: { cluster: null, list: null, error: null, loading: false, seq: 0, renderKey: "" },
+  gpuTimer: null,
 };
 
 async function api(path, opts = {}) {
@@ -83,11 +86,13 @@ async function loadConfig() {
       el("input", { type: "radio", name: "os", value: o.id, checked: i === 0 }),
       el("span", { class: "os-name" }, o.label,
         cfg.fips.enabled && o.fipsCapable ? el("span", { class: "tag", title: "FIPS 140 capable" }, "FIPS") : null,
-        cfg.stig.enabled && o.stigCapable ? el("span", { class: "tag", title: "DISA STIG capable" }, "STIG") : null),
+        cfg.stig.enabled && o.stigCapable ? el("span", { class: "tag", title: "DISA STIG capable" }, "STIG") : null,
+        cfg.gpu.enabled && o.gpuCapable ? el("span", { class: "tag", title: "Can attach a GPU and install the NVIDIA driver" }, "GPU") : null),
       el("span", { class: "os-id" }, o.id),
     )));
   $("#fips-option").classList.toggle("hidden", !cfg.fips.enabled);
   $("#stig-option").classList.toggle("hidden", !cfg.stig.enabled);
+  $("#gpu-section").classList.toggle("hidden", !cfg.gpu.enabled);
 
   $("#k8s-versions").replaceChildren(...cfg.catalog.kubernetesVersions.map((v) => el("option", { value: v })));
 
@@ -139,6 +144,7 @@ function onFormChange() {
     .replaceAll("{version}", version)
     .replaceAll("{fips}", fipsSelected() || stigSelected() ? "-fips" : "")
     .replaceAll("{stig}", stigSelected() ? "-stig" : "")
+    .replaceAll("{gpu}", gpuSelected() ? (selectedGPU()?.mode === "vgpu" ? "-vgpu" : "-gpu") : "")
     .replaceAll("{timestamp}", "<timestamp>");
   $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
   // OSes without a usable default image must pick a Prism image or a URL.
@@ -152,6 +158,151 @@ function onFormChange() {
   const mode = sourceMode();
   $$("[data-source-mode]").forEach((n) => n.classList.toggle("hidden", n.dataset.sourceMode !== mode));
   $("#rhsm-fields").classList.toggle("hidden", !os.requiresRHSM);
+  onGPUFormChange(os);
+}
+
+/* ---------- GPU ---------- */
+
+function onGPUFormChange(os) {
+  const cfg = state.config.gpu;
+  if (!cfg.enabled) return;
+  const f = $("#build-form");
+  const box = f.gpuEnabled;
+  box.disabled = !os.gpuCapable;
+  if (!os.gpuCapable) box.checked = false;
+  $("#gpu-hint").textContent = os.gpuCapable
+    ? `Attaches a GPU from the build cluster to the build VM, installs the NVIDIA driver for it (the ${cfg.driverBranch} data center driver for passthrough GPUs, the vGPU guest driver for vGPU profiles) and checks it with nvidia-smi.`
+    : `Not available for ${os.label}. GPU builds are supported on Ubuntu, RHEL 9 and Rocky Linux 9.`;
+  const on = gpuSelected();
+  $("#gpu-fields").classList.toggle("hidden", !on);
+  if (!on) return;
+  // Discovery lists the cluster's GPUs; without it, or when it fails, the
+  // user types the name Prism Central shows.
+  const cluster = f.clusterName.value.trim();
+  if (cfg.discovery && cluster !== state.gpus.cluster) {
+    clearTimeout(state.gpuTimer);
+    state.gpuTimer = setTimeout(() => loadGPUs(), 400);
+  }
+  renderGPUs();
+}
+
+function gpuSelected() {
+  const os = selectedOS();
+  return Boolean(state.config.gpu.enabled && os?.gpuCapable && $("#build-form").gpuEnabled.checked);
+}
+
+function packageFamily(osID) {
+  if (osID.startsWith("ubuntu")) return "deb";
+  if (/^(rhel|rocky|alma|centos)/.test(osID)) return "rpm";
+  return "";
+}
+
+// Mirrors NVIDIAConfig.vgpuDriverFor: the OS's own package, else the .run;
+// DISA STIG builds need the .rpm.
+function vgpuDriverAvailable() {
+  const d = state.config.gpu.vgpuDriver || {};
+  const fam = packageFamily(selectedOS()?.id || "");
+  if (stigSelected()) return Boolean(d.rpm);
+  return Boolean((fam && d[fam]) || d.run);
+}
+
+// Why a listed GPU can't be picked, or "".
+function gpuBlockReason(g) {
+  if (g.vendor !== "NVIDIA") return "only NVIDIA GPUs are supported";
+  if (g.available === 0) return "all in use";
+  if (g.mode === "vgpu" && !vgpuDriverAvailable()) {
+    return stigSelected() ? "STIG needs the vGPU driver .rpm" : "no vGPU driver configured for this OS";
+  }
+  return "";
+}
+
+function gpuKey(g) {
+  return `${g.mode}|${g.name}`;
+}
+
+async function loadGPUs(force = false) {
+  const g = state.gpus;
+  const cluster = $("#build-form").clusterName.value.trim();
+  if (!force && cluster === g.cluster && (g.list || g.loading)) return;
+  const seq = ++g.seq;
+  Object.assign(g, { cluster, list: null, error: null, loading: Boolean(cluster) });
+  if (!cluster) g.error = "Enter the Prism Element cluster above first.";
+  renderGPUs();
+  if (!cluster) return;
+  let list = null;
+  let error = null;
+  try {
+    list = await api(`/api/gpus?cluster=${encodeURIComponent(cluster)}`);
+  } catch (e) {
+    error = e.message;
+  }
+  if (seq !== g.seq) return; // a newer request (another cluster) won
+  Object.assign(g, { list, error, loading: false });
+  renderGPUs();
+}
+
+function renderGPUs() {
+  const cfg = state.config.gpu;
+  const g = state.gpus;
+  const f = $("#build-form");
+  const failed = Boolean(g.error) && !g.loading;
+  $("#gpu-discovered").classList.toggle("hidden", !cfg.discovery);
+  $("#gpu-manual").classList.toggle("hidden", cfg.discovery && !failed);
+  $("#gpu-cluster").textContent = g.cluster || f.clusterName.value.trim() || "the build cluster";
+
+  let status = "Type the GPU or vGPU profile name as Prism Central shows it on the cluster's hosts.";
+  if (cfg.discovery) {
+    if (g.loading) status = "Asking Prism Central for the cluster's GPUs…";
+    else if (failed) status = `Couldn't list GPUs (${g.error}). Type the name instead.`;
+    else if (g.list && !g.list.clusterFound) status = `Prism Central has no cluster named ${g.list.cluster}.`;
+    else if (g.list) status = g.list.gpus.length
+      ? "Passthrough GPUs get a whole GPU; vGPU profiles a slice of one. Counts are free / total right now."
+      : `Cluster ${g.list.cluster} has no GPUs.`;
+  }
+  $("#gpu-status").textContent = status;
+
+  // Rebuild the options only when what they show changes, so typing
+  // elsewhere doesn't reset the user's choice.
+  const key = JSON.stringify([g.seq, g.loading, g.error, selectedOS()?.id, stigSelected()]);
+  if (!cfg.discovery || key === g.renderKey) return;
+  g.renderKey = key;
+  const sel = f.gpuChoice;
+  const prev = sel.value;
+  let opts;
+  if (g.loading) opts = [el("option", { value: "" }, "Loading…")];
+  else if (failed || !g.list) opts = [el("option", { value: "" }, "—")];
+  else if (!g.list.gpus.length) opts = [el("option", { value: "" }, "No GPUs on this cluster")];
+  else {
+    opts = [el("option", { value: "" }, "Choose a GPU…"), ...g.list.gpus.map((x) => {
+      const why = gpuBlockReason(x);
+      const kind = x.mode === "vgpu" ? "vGPU profile" : "passthrough";
+      return el("option", { value: gpuKey(x), disabled: Boolean(why) },
+        `${x.name} · ${kind} · ${x.available} of ${x.total} free${why ? ` (${why})` : ""}`);
+    })];
+  }
+  sel.replaceChildren(...opts);
+  const keep = opts.find((o) => o.value === prev && !o.disabled);
+  sel.value = keep ? prev : "";
+}
+
+// The GPU the user picked or typed, or null.
+function selectedGPU() {
+  const f = $("#build-form");
+  const discovered = !$("#gpu-discovered").classList.contains("hidden");
+  if (discovered && f.gpuChoice.value) {
+    const [mode, ...name] = f.gpuChoice.value.split("|");
+    return { name: name.join("|"), mode };
+  }
+  if (!$("#gpu-manual").classList.contains("hidden") && f.gpuName.value.trim()) {
+    return { name: f.gpuName.value.trim(), mode: f.gpuMode.value };
+  }
+  return null;
+}
+
+// The input to highlight for a "gpu" field error.
+function gpuInputName() {
+  return $("#gpu-discovered").classList.contains("hidden") || !$("#gpu-manual").classList.contains("hidden")
+    ? "gpuName" : "gpuChoice";
 }
 
 function fipsSelected() {
@@ -202,6 +353,13 @@ function collectRequest() {
   };
   if (fipsSelected()) req.fips = true;
   if (stigSelected()) req.stig = req.fips = true;
+  if (gpuSelected()) {
+    req.gpu = selectedGPU();
+    if (!req.gpu) {
+      const msg = "Choose a GPU, or untick “Attach a GPU”.";
+      throw Object.assign(new Error(msg), { fields: { gpu: msg } });
+    }
+  }
   if (state.config.features.allowExtraVars) {
     const vars = parseExtraVars(f.extraVars.value);
     if (Object.keys(vars).length) req.extraVars = vars;
@@ -232,7 +390,7 @@ function showErrors(err) {
   for (const [k, msg] of Object.entries(fields)) {
     const slot = $(`[data-error-for="${CSS.escape(k)}"]`);
     if (slot) slot.textContent = msg;
-    const inputName = k.startsWith("credentials.") ? "cred." + k.slice(12) : k;
+    const inputName = k === "gpu" ? gpuInputName() : k.startsWith("credentials.") ? "cred." + k.slice(12) : k;
     const input = $("#build-form").elements[inputName];
     if (input instanceof HTMLElement) {
       input.classList.add("invalid");
@@ -292,7 +450,8 @@ async function refreshBuilds() {
       el("td", {}, statusPill(b.phase)),
       el("td", { class: "mono" }, b.imageName,
         b.request?.fips ? el("span", { class: "tag" }, "FIPS") : null,
-        b.request?.stig ? el("span", { class: "tag" }, "STIG") : null),
+        b.request?.stig ? el("span", { class: "tag" }, "STIG") : null,
+        b.request?.gpu ? el("span", { class: "tag", title: b.request.gpu.name }, b.request.gpu.mode === "vgpu" ? "vGPU" : "GPU") : null),
       el("td", {}, osLabel(b.os)),
       el("td", { class: "mono" }, b.request?.kubernetesVersion || "—"),
       el("td", {}, fmtTime(b.startedAt || b.createdAt)),
@@ -313,6 +472,7 @@ function renderDetailHeader(b) {
     ["Kubernetes", r.kubernetesVersion],
     ["FIPS 140", r.fips ? "Yes" : null],
     ["DISA STIG", r.stig ? "Yes. Scan report and exceptions in the image at /usr/share/image-builder/stig; summary at the end of the log" : null],
+    ["GPU", r.gpu ? `${r.gpu.name} (${r.gpu.mode === "vgpu" ? "vGPU profile, vGPU guest driver" : "passthrough, NVIDIA data center driver"}). The build fails unless nvidia-smi sees it.` : null],
     ["Cluster", r.clusterName],
     ["Subnet", r.subnetName],
     ["VM size", r.cpus ? `${r.cpus} vCPU · ${r.memoryMB} MB · ${r.diskSizeGB} GB` : null],
@@ -341,7 +501,18 @@ function renderDetailHeader(b) {
     : [`--vm-image ${b.imageName}`, `--kubernetes-version ${k8s}`];
   $("#detail-next-cmd").textContent =
     ["nkp create cluster nutanix", ...lines.map((l) => `  ${l}`), "  …"].join(" \\\n") +
-    (r.fips ? '\n\n# <etcd-version>: the etcd version from the "FIPS etcd image"\n# line in the build log, e.g. 3.6.8' : "");
+    (r.fips ? '\n\n# <etcd-version>: the etcd version from the "FIPS etcd image"\n# line in the build log, e.g. 3.6.8' : "") +
+    (r.gpu ? [
+      "",
+      "",
+      "# GPU image: give the GPU worker machines the same GPU in their",
+      "# NutanixMachineTemplate (spec.template.spec):",
+      "#   gpus:",
+      "#     - type: name",
+      `#       name: ${JSON.stringify(r.gpu.name)}`,
+      "# The NVIDIA driver is already in the image, so run the NVIDIA",
+      "# GPU Operator with driver.enabled=false.",
+    ].join("\n") : "");
 }
 
 async function openDetail(id) {
@@ -443,6 +614,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   f.addEventListener("input", onFormChange);
   f.addEventListener("change", onFormChange);
   $("#refresh").addEventListener("click", refreshBuilds);
+  $("#gpu-refresh").addEventListener("click", () => loadGPUs(true));
   $("#detail-close").addEventListener("click", closeDetail);
   $("#detail").addEventListener("close", () => { stopLogs(); state.detailId = null; });
   $("#detail-cancel").addEventListener("click", onCancel);

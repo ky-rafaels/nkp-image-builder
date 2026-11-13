@@ -1,0 +1,65 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Fails the build unless the installed driver drives the attached GPU and is
+# installed for the kernel the image boots.
+---
+- name: Check whether nouveau is loaded
+  ansible.builtin.command: grep -qw ^nouveau /proc/modules
+  register: gpu_nouveau_loaded
+  changed_when: false
+  failed_when: false
+
+- name: Fail if nouveau holds the GPU
+  ansible.builtin.fail:
+    msg: >-
+      The nouveau driver is loaded, so the NVIDIA driver can't bind the GPU.
+      ansible/gpu-prepare.yml blocks nouveau before the reboot; check
+      /etc/modprobe.d/blocklist-nouveau.conf made it into the initramfs.
+  when: gpu_nouveau_loaded.rc == 0
+
+- name: Load the NVIDIA kernel module
+  ansible.builtin.command: modprobe nvidia
+  changed_when: false
+
+- name: Query the attached GPU with nvidia-smi
+  ansible.builtin.command: >-
+    nvidia-smi --query-gpu=index,name,pci.bus_id,driver_version,memory.total --format=csv,noheader
+  register: gpu_nvidia_smi
+  changed_when: false
+  failed_when: gpu_nvidia_smi.rc != 0 or gpu_nvidia_smi.stdout | trim | length == 0
+
+- name: Report the GPU as the driver sees it
+  ansible.builtin.debug:
+    msg: "nvidia-smi on {{ gpu_running_kernel }}: {{ gpu_nvidia_smi.stdout_lines | join(' | ') }}"
+
+- name: Check the driver is installed for the default kernel {{ gpu_default_kernel }}
+  ansible.builtin.command: modinfo -k {{ gpu_default_kernel }} -F version nvidia
+  register: gpu_default_kernel_module
+  changed_when: false
+  failed_when: gpu_default_kernel_module.rc != 0 or gpu_default_kernel_module.stdout | trim | length == 0
+
+- name: Read the installed services
+  ansible.builtin.service_facts:
+
+# Keeps the driver initialised between CUDA jobs, as NVIDIA recommends for
+# compute nodes; nvidia-gridd licenses vGPUs.
+- name: Enable the NVIDIA persistence and licensing daemons
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+  loop:
+    - nvidia-persistenced.service
+    - nvidia-gridd.service
+  when: item in ansible_facts['services']

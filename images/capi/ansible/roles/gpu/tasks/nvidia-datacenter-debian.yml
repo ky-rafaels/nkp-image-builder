@@ -1,0 +1,60 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# NVIDIA data center driver for a passthrough GPU on Ubuntu, from the Ubuntu
+# archive (so it follows ubuntu_repo mirrors): the headless "-server" driver
+# with Canonical's signed, prebuilt kernel modules, as `ubuntu-drivers
+# --gpgpu` selects them for the attached GPU and the installed kernel flavour.
+---
+- name: Install ubuntu-drivers
+  ansible.builtin.apt:
+    name: ubuntu-drivers-common
+    state: present
+    update_cache: true
+  register: apt_lock_status
+  until: apt_lock_status is not failed
+  retries: 5
+  delay: 10
+
+- name: Install the NVIDIA {{ gpu_nvidia_driver_branch }} server driver and prebuilt kernel modules
+  ansible.builtin.command: >-
+    ubuntu-drivers install --gpgpu
+    nvidia:{{ gpu_nvidia_driver_branch }}-server{{ '-open' if gpu_nvidia_open_kernel_modules | bool else '' }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: gpu_ubuntu_drivers
+  changed_when: "'No drivers found' not in gpu_ubuntu_drivers.stdout"
+
+# ubuntu-drivers exits 0 when no driver matches the GPU it detected.
+- name: Fail if ubuntu-drivers found no matching driver
+  ansible.builtin.fail:
+    msg: >-
+      ubuntu-drivers found no nvidia:{{ gpu_nvidia_driver_branch }}-server{{
+      '-open' if gpu_nvidia_open_kernel_modules | bool else '' }} driver for the
+      attached GPU. Check that gpu_nvidia_driver_branch is a -server branch this
+      Ubuntu release has, and that the open kernel modules suit the GPU (they
+      need Turing or newer; set gpu_nvidia_open_kernel_modules=false for P4,
+      P40, P100 and V100).
+  when: "'No drivers found' in (gpu_ubuntu_drivers.stdout ~ gpu_ubuntu_drivers.stderr)"
+
+- name: Install nvidia-smi and nvidia-persistenced
+  ansible.builtin.apt:
+    name:
+      - nvidia-utils-{{ gpu_nvidia_driver_branch }}-server
+      - nvidia-compute-utils-{{ gpu_nvidia_driver_branch }}-server
+    state: present
+  register: apt_lock_status
+  until: apt_lock_status is not failed
+  retries: 5
+  delay: 10

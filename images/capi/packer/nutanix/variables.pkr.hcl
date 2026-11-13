@@ -730,3 +730,56 @@ variable "stig_partition_sizes" {
   description = "Sizes of the separate STIG filesystems created in the build disk (/var gets the rest, at least 10 GiB). kubelet keeps container logs in /var/log."
   default     = "var_log=8G var_log_audit=4G var_tmp=2G home=1G tmp=2G"
 }
+
+# --- GPU ----------------------------------------------------------------------
+# With nutanix_gpu_name set, that GPU is attached to the build VM and the NVIDIA
+# driver for it is installed and checked with nvidia-smi (ansible/gpu-prepare.yml,
+# ansible/roles/gpu tasks install.yml). Passthrough GPUs get NVIDIA's data
+# center driver: from the Ubuntu archive on Ubuntu, from NVIDIA's CUDA repo on
+# RHEL/Rocky. vGPU profiles get the vGPU guest driver from
+# gpu_nvidia_vgpu_driver_url. Ubuntu, RHEL 9 and Rocky Linux 9 only.
+variable "nutanix_gpu_name" {
+  type        = string
+  description = "GPU to attach to the build VM: a passthrough GPU (e.g. \"NVIDIA L40S\") or vGPU profile on the build cluster, named as Prism Central lists it on the cluster's hosts. Empty builds without a GPU."
+  default     = ""
+}
+variable "gpu_nvidia_driver_branch" {
+  type        = string
+  description = "NVIDIA data center driver branch for passthrough GPUs (Ubuntu: nvidia:<branch>-server; RHEL/Rocky: the nvidia-driver:<branch>-open module stream)."
+  default     = "580"
+  validation {
+    condition     = can(regex("^[0-9]+$", var.gpu_nvidia_driver_branch))
+    error_message = "The gpu_nvidia_driver_branch must be a driver branch number, e.g. 580."
+  }
+}
+variable "gpu_nvidia_open_kernel_modules" {
+  type        = bool
+  description = "Use NVIDIA's open kernel modules (Turing and newer GPUs). Set false for P4, P40, P100 and V100."
+  default     = true
+}
+variable "gpu_nvidia_rpm_repo" {
+  type        = string
+  description = "RHEL/Rocky: NVIDIA CUDA repo with the driver. Empty uses https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64."
+  default     = ""
+}
+variable "gpu_nvidia_rpm_gpg_key" {
+  type        = string
+  description = "RHEL/Rocky: key that signs gpu_nvidia_rpm_repo. Empty uses <repo>/D42D0685.pub."
+  default     = ""
+}
+variable "gpu_nvidia_vgpu_driver_url" {
+  type        = string
+  description = "For a vGPU profile: URL of NVIDIA's vGPU guest driver from the NVIDIA Licensing Portal (.run, or .rpm on RHEL/Rocky, .deb on Ubuntu; DISA STIG builds need the .rpm). Its version must match the AHV hosts' vGPU manager. Empty means a passthrough GPU."
+  default     = ""
+}
+variable "gpu_nvidia_vgpu_driver_sha256" {
+  type        = string
+  description = "sha256 of gpu_nvidia_vgpu_driver_url, checked after download. Empty skips the check."
+  default     = ""
+}
+variable "gpu_nvidia_vgpu_license_token" {
+  type        = string
+  description = "NVIDIA License System client configuration token (.tok contents) to bake into vGPU images. Defaults to $NVIDIA_VGPU_LICENSE_TOKEN."
+  default     = env("NVIDIA_VGPU_LICENSE_TOKEN")
+  sensitive   = true
+}

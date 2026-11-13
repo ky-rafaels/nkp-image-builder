@@ -197,6 +197,10 @@ td .tag { margin-left: 8px; }
 .fips-option { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
 .fips-option .check { margin-bottom: 0; }
 .check:has(input:disabled) { color: var(--muted); }
+#gpu-section > .check { margin-bottom: 2px; }
+.gpu-fields { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.gpu-row { align-items: flex-end; }
+.gpu-row > button { margin-bottom: 12px; }
 .os-id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
 
 details.advanced {

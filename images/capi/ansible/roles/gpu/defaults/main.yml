@@ -21,3 +21,37 @@ gpu_nvidia_ceph: false
 gpu_flatcar_nvidia_sysext_name: "nvidia-drivers-570"
 gpu_flatcar_nvidia_runtime_url: ""
 gpu_flatcar_nvidia_runtime_filename: ""
+
+# --- Driver for a GPU attached to the build VM --------------------------------
+# Used through tasks_from (prepare.yml from ansible/gpu-prepare.yml, install.yml
+# from node.yml) when gpu_enabled is true, e.g. a Nutanix build with
+# nutanix_gpu_name set. The gpu_vendor/node_custom_roles_pre flow above is
+# separate and unchanged.
+gpu_enabled: false
+# The GPU or vGPU profile attached to the build VM, for messages.
+gpu_name: ""
+# NVIDIA data center driver branch for passthrough GPUs (580 is a long-term
+# support branch). Ubuntu installs nvidia:<branch>-server from the Ubuntu
+# archive (signed, prebuilt kernel modules); RHEL/Rocky install the
+# nvidia-driver:<branch>-open (or -dkms) module stream from NVIDIA's CUDA repo.
+gpu_nvidia_driver_branch: "580"
+# NVIDIA's open kernel modules support Turing and newer GPUs (T4, A-, L- and
+# H-series). Set false for older GPUs (P4, P40, P100, V100).
+gpu_nvidia_open_kernel_modules: true
+# RHEL/Rocky only: NVIDIA's CUDA repo and signing key. Empty uses
+# developer.download.nvidia.com; set both to mirror it.
+gpu_nvidia_rpm_repo: ""
+gpu_nvidia_rpm_gpg_key: ""
+# RHEL/Rocky only: enable CodeReady Builder / CRB, which NVIDIA lists as a
+# prerequisite alongside EPEL (from redhat_epel_rpm).
+gpu_nvidia_enable_crb: true
+# vGPU profiles need NVIDIA's vGPU guest driver, which is only available from
+# the NVIDIA Licensing Portal, so it's downloaded from here: a .run (any OS),
+# .rpm (RHEL/Rocky) or .deb (Ubuntu). Empty means a passthrough GPU and the
+# data center driver above. DISA STIG builds need the .rpm, because fapolicyd
+# only trusts files installed from packages.
+gpu_nvidia_vgpu_driver_url: ""
+gpu_nvidia_vgpu_driver_sha256: ""
+# NVIDIA License System client configuration token (.tok contents). Optional;
+# without it the vGPU runs unlicensed (degraded) until licensed at runtime.
+gpu_nvidia_vgpu_license_token: ""

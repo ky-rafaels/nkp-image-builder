@@ -1,0 +1,108 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# NVIDIA data center driver for a passthrough GPU on RHEL/Rocky, from NVIDIA's
+# CUDA repo: the compute-only packages of the nvidia-driver:<branch>-open (or
+# <branch>-dkms) module stream, with the kernel module built by DKMS. dkms
+# comes from EPEL (the setup role's redhat_epel_rpm). Everything is an RPM, so
+# fapolicyd trusts it on DISA STIG builds.
+---
+- name: Set the NVIDIA CUDA repo location
+  ansible.builtin.set_fact:
+    # NVIDIA publishes Arm server packages as "sbsa".
+    gpu_nvidia_rpm_repo_url: >-
+      {{ gpu_nvidia_rpm_repo | default('', true)
+         or 'https://developer.download.nvidia.com/compute/cuda/repos/rhel'
+            ~ ansible_facts['distribution_major_version'] ~ '/'
+            ~ {'aarch64': 'sbsa'}.get(ansible_facts['architecture'], ansible_facts['architecture']) }}
+    gpu_nvidia_rpm_stream: >-
+      {{ gpu_nvidia_driver_branch }}-{{ 'open' if gpu_nvidia_open_kernel_modules | bool else 'dkms' }}
+
+- name: Install dnf config-manager
+  ansible.builtin.dnf:
+    name: dnf-plugins-core
+    state: present
+    lock_timeout: 60
+
+- name: Enable CodeReady Builder (RHEL)
+  ansible.builtin.command: >-
+    subscription-manager repos --enable
+    codeready-builder-for-rhel-{{ ansible_facts['distribution_major_version'] }}-{{ ansible_facts['architecture'] }}-rpms
+  register: gpu_crb
+  changed_when: gpu_crb.rc == 0
+  failed_when: false
+  when:
+    - gpu_nvidia_enable_crb | bool
+    - ansible_facts['distribution'] == 'RedHat'
+    - lookup('env', 'RHSM_USER') | length > 0
+
+- name: Enable CRB (Rocky and other rebuilds)
+  ansible.builtin.command: dnf config-manager --set-enabled crb
+  register: gpu_crb_rebuild
+  changed_when: gpu_crb_rebuild.rc == 0
+  failed_when: false
+  when:
+    - gpu_nvidia_enable_crb | bool
+    - ansible_facts['distribution'] != 'RedHat'
+
+- name: Report a CRB repo that couldn't be enabled
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: could not enable the CodeReady Builder / CRB repo
+      ({{ (gpu_crb.stderr | default('') ~ gpu_crb_rebuild.stderr | default('')) | trim }}).
+      Continuing; package installs below fail if the driver needs it.
+  when: (gpu_crb.rc | default(0)) != 0 or (gpu_crb_rebuild.rc | default(0)) != 0
+
+- name: Add NVIDIA's CUDA repository
+  ansible.builtin.yum_repository:
+    name: cuda-rhel{{ ansible_facts['distribution_major_version'] }}-{{ ansible_facts['architecture'] }}
+    description: NVIDIA CUDA for RHEL {{ ansible_facts['distribution_major_version'] }}
+    baseurl: "{{ gpu_nvidia_rpm_repo_url }}"
+    gpgcheck: true
+    gpgkey: "{{ gpu_nvidia_rpm_gpg_key | default('', true) or gpu_nvidia_rpm_repo_url ~ '/D42D0685.pub' }}"
+    enabled: true
+
+- name: Import NVIDIA's package signing key
+  ansible.builtin.rpm_key:
+    key: "{{ gpu_nvidia_rpm_gpg_key | default('', true) or gpu_nvidia_rpm_repo_url ~ '/D42D0685.pub' }}"
+    state: present
+
+# The module build compresses firmware shaders with xz, which no package
+# declares.
+- name: Install DKMS and the kernel headers for {{ gpu_kernels | join(', ') }}
+  ansible.builtin.dnf:
+    name: "{{ ['dkms', 'kernel-headers', 'xz'] + gpu_kernels | map('regex_replace', '^', 'kernel-devel-') | list }}"
+    state: present
+    lock_timeout: 60
+
+# Streams are exclusive; reset first so a rebuild can switch branch or flavour.
+- name: Select the nvidia-driver:{{ gpu_nvidia_rpm_stream }} module stream
+  ansible.builtin.shell:
+    cmd: dnf -y module reset nvidia-driver && dnf -y module enable nvidia-driver:{{ gpu_nvidia_rpm_stream }}
+  changed_when: true
+
+- name: Install the NVIDIA compute-only driver
+  ansible.builtin.dnf:
+    name:
+      - nvidia-driver-cuda
+      - "{{ 'kmod-nvidia-open-dkms' if gpu_nvidia_open_kernel_modules | bool else 'kmod-nvidia-latest-dkms' }}"
+      - nvidia-persistenced
+    state: present
+    lock_timeout: 60
+
+# The package's own DKMS hook builds for the running kernel only.
+- name: Build the NVIDIA kernel module for {{ gpu_kernels | join(', ') }}
+  ansible.builtin.command: dkms autoinstall -k {{ item }}
+  loop: "{{ gpu_kernels }}"
+  changed_when: true

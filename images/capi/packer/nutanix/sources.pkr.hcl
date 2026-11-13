@@ -47,4 +47,12 @@ source "nutanix" "node" {
   vm_nics {
     subnet_name = var.nutanix_subnet_name
   }
+
+  # The plugin looks the name up on the cluster's hosts (case-insensitive).
+  dynamic "gpu" {
+    for_each = local.gpu_enabled ? [var.nutanix_gpu_name] : []
+    content {
+      name = gpu.value
+    }
+  }
 }

@@ -110,6 +110,36 @@
           </div>
         </fieldset>
 
+        <fieldset class="hidden" id="gpu-section">
+          <legend>GPU</legend>
+          <label class="check"><input type="checkbox" name="gpuEnabled"> Attach a GPU and install the NVIDIA driver</label>
+          <small class="hint" id="gpu-hint"></small>
+          <div class="gpu-fields hidden" id="gpu-fields">
+            <div class="row gpu-row" id="gpu-discovered">
+              <label class="field grow">
+                <span>GPU on <span id="gpu-cluster"></span></span>
+                <select name="gpuChoice"></select>
+              </label>
+              <button type="button" class="ghost" id="gpu-refresh">Refresh</button>
+            </div>
+            <div class="row hidden" id="gpu-manual">
+              <label class="field grow">
+                <span>GPU name in Prism Central</span>
+                <input name="gpuName" placeholder="NVIDIA L40S" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="field">
+                <span>Type</span>
+                <select name="gpuMode">
+                  <option value="passthrough">Passthrough GPU</option>
+                  <option value="vgpu">vGPU profile</option>
+                </select>
+              </label>
+            </div>
+            <small class="hint" id="gpu-status"></small>
+            <small class="field-error" data-error-for="gpu"></small>
+          </div>
+        </fieldset>
+
         <details class="advanced" id="credentials-section">
           <summary>Prism Central credentials <span class="muted">(optional override)</span></summary>
           <p class="hint">Leave blank to use the credentials configured for this service. Values are stored only in a per-build Secret deleted with the build.</p>

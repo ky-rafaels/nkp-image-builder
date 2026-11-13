@@ -3,11 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 )
+
+var reDriverBranch = regexp.MustCompile(`^[0-9]{3,4}$`)
 
 // Config is loaded from a JSON file rendered by the Helm chart (see
 // charts/nkp-image-builder/templates/configmap.yaml). Everything a viewer of
@@ -24,6 +28,113 @@ type Config struct {
 	Features FeatureConfig `json:"features"`
 	FIPS     FIPSConfig    `json:"fips"`
 	STIG     STIGConfig    `json:"stig"`
+	GPU      GPUConfig     `json:"gpu"`
+}
+
+// GPUConfig controls the "Attach a GPU" build option: a GPU or vGPU profile
+// from the build cluster is attached to the build VM, and the NVIDIA driver
+// for it is installed and checked with nvidia-smi (see
+// images/capi/ansible/roles/gpu).
+type GPUConfig struct {
+	Enabled bool `json:"enabled"`
+	// Discovery lists the build cluster's GPUs from Prism Central in the form
+	// and checks the chosen one before a build starts. The UI pod then needs
+	// the Prism Central credentials (NUTANIX_* env, set by the chart).
+	Discovery bool         `json:"discovery"`
+	NVIDIA    NVIDIAConfig `json:"nvidia"`
+}
+
+// NVIDIAConfig sets the gpu_nvidia_* Packer variables. Empty fields keep the
+// defaults in packer/nutanix/variables.pkr.hcl.
+type NVIDIAConfig struct {
+	// Data center driver branch for passthrough GPUs, e.g. "580".
+	DriverBranch string `json:"driverBranch"`
+	// Open kernel modules (Turing and newer). False for P4/P40/P100/V100.
+	OpenKernelModules *bool `json:"openKernelModules"`
+	// RHEL/Rocky: mirror of NVIDIA's CUDA repo and its signing key.
+	RPMRepo   string `json:"rpmRepo"`
+	RPMGPGKey string `json:"rpmGpgKey"`
+	// NVIDIA vGPU guest driver from the NVIDIA Licensing Portal, on a mirror.
+	// vGPU profiles can only be picked for an OS that has one.
+	VGPUDriver VGPUDrivers `json:"vgpuDriver"`
+}
+
+// VGPUDrivers are the vGPU guest driver's packages. The .run works on every
+// OS; the .rpm (RHEL/Rocky) and .deb (Ubuntu) are used instead where set.
+// DISA STIG builds need the .rpm: fapolicyd only trusts packaged files.
+type VGPUDrivers struct {
+	Run VGPUDriver `json:"run"`
+	RPM VGPUDriver `json:"rpm"`
+	DEB VGPUDriver `json:"deb"`
+}
+
+type VGPUDriver struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+}
+
+// defaultNVIDIADriverBranch matches gpu_nvidia_driver_branch in
+// packer/nutanix/variables.pkr.hcl; it is only shown in the UI.
+const defaultNVIDIADriverBranch = "580"
+
+func (n NVIDIAConfig) Branch() string {
+	if n.DriverBranch != "" {
+		return n.DriverBranch
+	}
+	return defaultNVIDIADriverBranch
+}
+
+// packageFamily is "rpm" or "deb" for the OSes the GPU build supports.
+func packageFamily(osID string) string {
+	switch {
+	case strings.HasPrefix(osID, "ubuntu"):
+		return "deb"
+	case strings.HasPrefix(osID, "rhel"), strings.HasPrefix(osID, "rocky"),
+		strings.HasPrefix(osID, "alma"), strings.HasPrefix(osID, "centos"):
+		return "rpm"
+	}
+	return ""
+}
+
+// vgpuDriverFor picks the vGPU guest driver package for an OS.
+func (n NVIDIAConfig) vgpuDriverFor(osID string, stig bool) (VGPUDriver, bool) {
+	d := n.VGPUDriver
+	switch packageFamily(osID) {
+	case "rpm":
+		if d.RPM.URL != "" {
+			return d.RPM, true
+		}
+	case "deb":
+		if d.DEB.URL != "" {
+			return d.DEB, true
+		}
+	}
+	if !stig && d.Run.URL != "" {
+		return d.Run, true
+	}
+	return VGPUDriver{}, false
+}
+
+// packerVars maps the configured driver settings to Packer variables; the
+// vGPU guest driver only goes to vGPU builds.
+func (n NVIDIAConfig) packerVars(vgpu *VGPUDriver) map[string]string {
+	out := map[string]string{}
+	set := func(k, v string) {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	set("gpu_nvidia_driver_branch", n.DriverBranch)
+	if n.OpenKernelModules != nil {
+		out["gpu_nvidia_open_kernel_modules"] = fmt.Sprint(*n.OpenKernelModules)
+	}
+	set("gpu_nvidia_rpm_repo", n.RPMRepo)
+	set("gpu_nvidia_rpm_gpg_key", n.RPMGPGKey)
+	if vgpu != nil {
+		set("gpu_nvidia_vgpu_driver_url", vgpu.URL)
+		set("gpu_nvidia_vgpu_driver_sha256", vgpu.SHA256)
+	}
+	return out
 }
 
 // STIGConfig controls the "DISA STIG" build option (see
@@ -177,6 +288,9 @@ type OSOption struct {
 	FIPSCapable bool `json:"fipsCapable"`
 	// STIGCapable offers DISA STIG hardening (needs FIPSCapable too).
 	STIGCapable bool `json:"stigCapable"`
+	// GPUCapable offers attaching a GPU and installing the NVIDIA driver.
+	// The build pipeline supports Ubuntu, RHEL 9 and Rocky Linux 9.
+	GPUCapable bool `json:"gpuCapable"`
 	// ImageNameOS is the {os} part of default image names. Derived from ID
 	// when empty: ubuntu-2404 -> ubuntu-24.04, rockylinux-9 -> rockylinux-9.
 	ImageNameOS string `json:"imageNameOS"`
@@ -215,6 +329,23 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if len(cfg.Catalog.OperatingSystems) == 0 {
 		return nil, fmt.Errorf("catalog.operatingSystems must not be empty")
+	}
+	if b := cfg.GPU.NVIDIA.DriverBranch; b != "" && !reDriverBranch.MatchString(b) {
+		return nil, fmt.Errorf("gpu.nvidia.driverBranch must be a driver branch number like 580, not %q", b)
+	}
+	d := cfg.GPU.NVIDIA.VGPUDriver
+	for _, c := range []struct {
+		kind string
+		drv  VGPUDriver
+	}{{"run", d.Run}, {"rpm", d.RPM}, {"deb", d.DEB}} {
+		if c.drv.URL == "" {
+			continue
+		}
+		p, err := url.Parse(c.drv.URL)
+		if err != nil || (p.Scheme != "http" && p.Scheme != "https") || p.Host == "" ||
+			!strings.HasSuffix(strings.ToLower(p.Path), "."+c.kind) {
+			return nil, fmt.Errorf("gpu.nvidia.vgpuDriver.%s.url must be an http(s) URL of a .%s file", c.kind, c.kind)
+		}
 	}
 	return cfg, nil
 }

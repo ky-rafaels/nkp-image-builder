@@ -1,0 +1,139 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# NVIDIA vGPU guest driver for a vGPU profile. NVIDIA only distributes it
+# through the NVIDIA Licensing Portal, so it is downloaded from
+# gpu_nvidia_vgpu_driver_url (your mirror). Its version must be supported by
+# the vGPU manager on the AHV hosts.
+---
+- name: Work out the vGPU guest driver package type
+  ansible.builtin.set_fact:
+    gpu_vgpu_pkg: "{{ (gpu_nvidia_vgpu_driver_url | urlsplit('path')).split('.')[-1] | lower }}"
+
+- name: Check the vGPU guest driver package suits this build
+  ansible.builtin.assert:
+    that:
+      - gpu_vgpu_pkg in ['run', 'rpm', 'deb']
+      - gpu_vgpu_pkg != 'rpm' or ansible_facts['os_family'] == 'RedHat'
+      - gpu_vgpu_pkg != 'deb' or ansible_facts['os_family'] == 'Debian'
+      - gpu_vgpu_pkg != 'run' or not (stig_enabled | default(false) | bool)
+    fail_msg: >-
+      gpu_nvidia_vgpu_driver_url must be the vGPU guest driver as a .run, or
+      an .rpm on RHEL/Rocky / a .deb on Ubuntu. DISA STIG builds need the .rpm:
+      fapolicyd only trusts files installed from packages. Got
+      {{ gpu_nvidia_vgpu_driver_url }} on {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+- name: Install the build tools and kernel headers for {{ gpu_kernels | join(', ') }} (Ubuntu)
+  ansible.builtin.apt:
+    name: "{{ ['build-essential', 'dkms', 'pkg-config', 'xz-utils'] + gpu_kernels | map('regex_replace', '^', 'linux-headers-') | list }}"
+    state: present
+    update_cache: true
+  register: apt_lock_status
+  until: apt_lock_status is not failed
+  retries: 5
+  delay: 10
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Install the build tools and kernel headers for {{ gpu_kernels | join(', ') }} (RHEL/Rocky)
+  ansible.builtin.dnf:
+    name: "{{ ['gcc', 'make', 'dkms', 'elfutils-libelf-devel', 'kernel-headers', 'xz'] + gpu_kernels | map('regex_replace', '^', 'kernel-devel-') | list }}"
+    state: present
+    lock_timeout: 60
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Download the vGPU guest driver
+  ansible.builtin.get_url:
+    url: "{{ gpu_nvidia_vgpu_driver_url }}"
+    dest: /var/tmp/nvidia-vgpu-guest-driver.{{ gpu_vgpu_pkg }}
+    checksum: "{{ ('sha256:' ~ gpu_nvidia_vgpu_driver_sha256) if gpu_nvidia_vgpu_driver_sha256 | length > 0 else omit }}"
+    mode: "0644"
+  register: gpu_vgpu_download
+  until: gpu_vgpu_download is not failed
+  retries: 5
+  delay: 10
+
+- name: Install the vGPU guest driver (.run)
+  ansible.builtin.command: >-
+    sh /var/tmp/nvidia-vgpu-guest-driver.run --silent --dkms --no-cc-version-check
+  changed_when: true
+  when: gpu_vgpu_pkg == 'run'
+
+- name: Install the vGPU guest driver (.rpm)
+  ansible.builtin.dnf:
+    name: /var/tmp/nvidia-vgpu-guest-driver.rpm
+    state: present
+    # The portal's guest driver RPMs aren't signed with a key in the RPM
+    # database; set gpu_nvidia_vgpu_driver_sha256 to pin the download instead.
+    disable_gpg_check: true
+    lock_timeout: 60
+  when: gpu_vgpu_pkg == 'rpm'
+
+- name: Install the vGPU guest driver (.deb)
+  ansible.builtin.apt:
+    deb: /var/tmp/nvidia-vgpu-guest-driver.deb
+    state: present
+  when: gpu_vgpu_pkg == 'deb'
+
+- name: Remove the downloaded vGPU guest driver
+  ansible.builtin.file:
+    path: /var/tmp/nvidia-vgpu-guest-driver.{{ gpu_vgpu_pkg }}
+    state: absent
+
+# The installers' DKMS hooks build for the running kernel only.
+- name: Build the NVIDIA kernel module for {{ gpu_kernels | join(', ') }}
+  ansible.builtin.command: dkms autoinstall -k {{ item }}
+  loop: "{{ gpu_kernels }}"
+  changed_when: true
+
+- name: Create the NVIDIA license token directory
+  ansible.builtin.file:
+    path: /etc/nvidia/ClientConfigToken
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: gpu_nvidia_vgpu_license_token | length > 0
+
+# NVIDIA's documented mode for the client configuration token.
+- name: Install the NVIDIA License System client configuration token
+  ansible.builtin.copy:
+    content: "{{ gpu_nvidia_vgpu_license_token }}"
+    dest: /etc/nvidia/ClientConfigToken/client_configuration_token.tok
+    owner: root
+    group: root
+    mode: "0744"
+  no_log: true
+  when: gpu_nvidia_vgpu_license_token | length > 0
+
+- name: Look for the driver's gridd.conf template
+  ansible.builtin.stat:
+    path: /etc/nvidia/gridd.conf.template
+  register: gpu_gridd_template
+
+- name: Create gridd.conf from the driver's template
+  ansible.builtin.copy:
+    src: /etc/nvidia/gridd.conf.template
+    dest: /etc/nvidia/gridd.conf
+    remote_src: true
+    force: false
+    mode: "0644"
+  when: gridd_feature_type is not defined and gpu_gridd_template.stat.exists
+
+- name: Set the licensed feature type in gridd.conf
+  ansible.builtin.template:
+    src: templates/gridd.conf.j2
+    dest: /etc/nvidia/gridd.conf
+    mode: "0644"
+  when: gridd_feature_type is defined

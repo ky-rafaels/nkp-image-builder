@@ -85,9 +85,11 @@ defaults:
   #   {timestamp} UTC build start time, YYYYMMDDhhmmss
   #   {fips}      "-fips" for FIPS builds, empty otherwise
   #   {stig}      "-stig" for DISA STIG builds, empty otherwise
+  #   {gpu}       "-gpu" (passthrough GPU) or "-vgpu" (vGPU profile) for GPU builds, empty otherwise
   # e.g. nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2
   #      nkp-rhel-9-fips-stig-release-1.36.1-20261105143022.qcow2
-  imageNameTemplate: "{prefix}{os}{fips}{stig}-release-{version}-{timestamp}.qcow2"
+  #      nkp-ubuntu-24.04-gpu-release-1.36.1-20261105143022.qcow2
+  imageNameTemplate: "{prefix}{os}{fips}{stig}{gpu}-release-{version}-{timestamp}.qcow2"
   httpProxy: ""
   httpsProxy: ""
   noProxy: ""
@@ -96,25 +98,31 @@ defaults:
 # `build-nutanix-<id>` make target in images/capi/Makefile. Optional
 # `imageNameOS` overrides the {os} part of the default image name.
 # `fipsCapable` offers the FIPS 140 option for that OS (EL9 only, see `fips`),
-# `stigCapable` the DISA STIG option (EL9 only, see `stig`).
+# `stigCapable` the DISA STIG option (EL9 only, see `stig`), `gpuCapable` the
+# GPU option (Ubuntu, RHEL 9 and Rocky 9, see `gpu`).
 catalog:
   operatingSystems:
     - id: ubuntu-2204
       label: Ubuntu 22.04
+      gpuCapable: true
     - id: ubuntu-2404
       label: Ubuntu 24.04
+      gpuCapable: true
     - id: ubuntu-2604
       label: Ubuntu 26.04
+      gpuCapable: true
     - id: rockylinux-9
       label: Rocky Linux 9
       fipsCapable: true
       stigCapable: true
+      gpuCapable: true
     - id: rhel-9
       label: RHEL 9
       requiresImageURL: true
       requiresRHSM: true
       fipsCapable: true
       stigCapable: true
+      gpuCapable: true
     - id: flatcar
       label: Flatcar
       # packer/nutanix/flatcar.json names a local file, not a URL.
@@ -185,6 +193,46 @@ stig:
   #  - rule: encrypt_partitions
   #    vuln_id: V-257879
   #    reason: Data at rest is encrypted by Nutanix Data-at-Rest Encryption.
+
+# -- GPU node images. The form lists the build cluster's GPUs and vGPU profiles
+# from Prism Central; the one picked is attached to the build VM, the NVIDIA
+# driver for it is installed, loaded and checked with nvidia-smi, and goss
+# checks it again. A GPU that isn't free fails the build, so pick one that is.
+#   * Passthrough GPUs get NVIDIA's data center driver: from the Ubuntu archive
+#     on Ubuntu (follows ubuntu_repo mirrors), from NVIDIA's CUDA repo on
+#     RHEL/Rocky (set nvidia.rpmRepo to mirror it).
+#   * vGPU profiles get NVIDIA's vGPU guest driver, which only the NVIDIA
+#     Licensing Portal distributes: put it on a mirror and set
+#     nvidia.vgpuDriver. Its version must be supported by the AHV hosts' vGPU
+#     manager. To license vGPUs from the image, add an
+#     NVIDIA_VGPU_LICENSE_TOKEN key (the NLS client configuration token) to the
+#     Nutanix credentials Secret.
+# GPUs with large BARs (A100, H100, ...) need UEFI: add boot_type=uefi to the
+# build's extra variables, and boot the nodes with UEFI too.
+gpu:
+  enabled: true
+  # List GPUs from Prism Central in the form and check the chosen one before a
+  # build starts. This gives the UI pod the Prism Central credentials
+  # (NUTANIX_* keys of the credentials Secret, as env). When false, users type
+  # the GPU name.
+  discovery: true
+  nvidia:
+    # Data center driver branch for passthrough GPUs. Default: 580 (long-term support).
+    driverBranch: ""
+    # NVIDIA's open kernel modules support Turing and newer (T4, A-, L-, H-series).
+    # Set false for P4, P40, P100 and V100. Default: true.
+    openKernelModules: null
+    # RHEL/Rocky: NVIDIA CUDA repo mirror and its key.
+    # Default: https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64 and <repo>/D42D0685.pub
+    rpmRepo: ""
+    rpmGpgKey: ""
+    # vGPU guest driver packages. The .run works on every OS; the .rpm
+    # (RHEL/Rocky; required for DISA STIG builds) and .deb (Ubuntu) are used
+    # instead where set. vGPU profiles are only offered for an OS with one.
+    vgpuDriver:
+      run: {url: "", sha256: ""}
+      rpm: {url: "", sha256: ""}
+      deb: {url: "", sha256: ""}
 
 features:
   # Let users enter their own Prism Central / RHSM credentials per build.

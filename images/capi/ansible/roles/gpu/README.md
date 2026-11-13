@@ -1,5 +1,41 @@
 # GPU driver installation
 
+# Attached GPU (Nutanix)
+
+Nutanix builds can attach a GPU to the build VM and bake in the NVIDIA driver
+for it, checked against that GPU. Set `nutanix_gpu_name` to the GPU or vGPU
+profile name Prism Central shows on the build cluster's hosts:
+
+```sh
+echo '{"nutanix_gpu_name": "NVIDIA L40S"}' > gpu.json
+PACKER_VAR_FILES=gpu.json make build-nutanix-ubuntu-2404
+```
+
+1. `ansible/gpu-prepare.yml` upgrades the OS (the `setup` role), blocks
+   nouveau and rebuilds the initramfs. Packer then reboots into the newest
+   kernel, and `packer/files/gpu/check-gpu.sh` checks the GPU is on the PCI
+   bus.
+2. `node.yml` runs `tasks/install.yml` after the node role:
+   * passthrough GPU: NVIDIA's data center driver, branch
+     `gpu_nvidia_driver_branch` (default 580). Ubuntu uses `ubuntu-drivers
+     install --gpgpu nvidia:<branch>-server[-open]` (signed, prebuilt kernel
+     modules from the Ubuntu archive). RHEL/Rocky use the compute-only packages
+     of NVIDIA's `nvidia-driver:<branch>-open` (or `-dkms`) module stream, with
+     DKMS.
+   * vGPU profile (`gpu_nvidia_vgpu_driver_url` set): NVIDIA's vGPU guest
+     driver (`.run`, `.rpm` or `.deb`) from that URL, and the optional
+     `gpu_nvidia_vgpu_license_token` (`$NVIDIA_VGPU_LICENSE_TOKEN`).
+3. `tasks/verify.yml` loads the module and fails the build unless
+   `nvidia-smi` sees the GPU and the module is installed for the default boot
+   kernel. goss checks `nvidia-smi -L` again.
+
+Ubuntu, RHEL 9 and Rocky Linux 9 only; the variables are in
+`packer/nutanix/variables.pkr.hcl` (`nutanix_gpu_name`, `gpu_nvidia_*`) and
+`defaults/main.yml`. This path doesn't use `gpu_vendor` or
+`node_custom_roles_pre`; the sections below describe that separate flow.
+
+# Driver in `node_custom_roles_pre`
+
 The GPU drivers have to be installed via the `node_custom_roles_pre` option to avoid an issue where, should a
 dist-upgrade install a new kernel,
 the driver won't work when the image is booted. This is because the DKMS hook doesn't run when the driver

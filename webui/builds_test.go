@@ -70,9 +70,12 @@ func TestDefaultImageName(t *testing.T) {
 		"no {fips}": {BuildDefaults{ImageNameTemplate: "{os}{fips}"}, OSOption{ID: "rhel-9"}, "rhel-9"},
 	}
 	for name, c := range cases {
-		if got := defaultImageName(c.d, c.o, "v1.36.1", false, false, ts); got != c.want {
+		if got := defaultImageName(c.d, c.o, "v1.36.1", false, false, "", ts); got != c.want {
 			t.Errorf("%s: got %q, want %q", name, got, c.want)
 		}
+	}
+	if got := defaultImageName(d, OSOption{ID: "ubuntu-2404"}, "v1.36.1", false, false, "-gpu", ts); got != "nkp-ubuntu-24.04-gpu-release-1.36.1-20260102030405.qcow2" {
+		t.Errorf("gpu: got %q", got)
 	}
 }
 

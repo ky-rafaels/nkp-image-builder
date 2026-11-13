@@ -54,9 +54,38 @@ type BuildRequest struct {
 	FIPS bool `json:"fips,omitempty"`
 	// STIG hardens the image to the DISA STIG. Implies FIPS.
 	STIG bool `json:"stig,omitempty"`
+	// GPU attaches a GPU from the build cluster to the build VM and installs
+	// the NVIDIA driver for it.
+	GPU *GPURequest `json:"gpu,omitempty"`
 
 	// Optional per-build credentials.
 	Credentials *BuildCredentials `json:"credentials,omitempty"`
+}
+
+const (
+	gpuModePassthrough = "passthrough"
+	gpuModeVGPU        = "vgpu"
+)
+
+type GPURequest struct {
+	// Name as Prism Central lists it on the cluster's hosts: a GPU model
+	// for passthrough (e.g. "NVIDIA L40S") or a vGPU profile.
+	Name string `json:"name"`
+	// Mode is "passthrough" (NVIDIA data center driver) or "vgpu" (NVIDIA
+	// vGPU guest driver). Defaults to passthrough.
+	Mode string `json:"mode,omitempty"`
+}
+
+// imageNameSuffix is the {gpu} part of default image names.
+func (g *GPURequest) imageNameSuffix() string {
+	switch {
+	case g == nil:
+		return ""
+	case g.Mode == gpuModeVGPU:
+		return "-vgpu"
+	default:
+		return "-gpu"
+	}
 }
 
 type BuildCredentials struct {
@@ -116,10 +145,13 @@ var deniedExtraVars = map[string]bool{
 	// mode the template ignores containerd_version/kubernetes_container_registry
 	// in favour of the fips_* sources.)
 	"fips_enabled": true,
+	// The GPU is a form option and its driver sources are set in the chart
+	// (gpu.nvidia.*).
+	"nutanix_gpu_name": true,
 }
 
 // deniedExtraVarPrefixes extends deniedExtraVars to whole families.
-var deniedExtraVarPrefixes = []string{"fips_", "stig_"}
+var deniedExtraVarPrefixes = []string{"fips_", "stig_", "gpu_"}
 
 // buildWrapper runs `make <target>` in its own process group and turns the
 // pod's SIGTERM (cancel / delete) into a SIGINT for the whole group -- the same
@@ -151,7 +183,7 @@ func (f fieldErrors) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-const defaultImageNameTemplate = "{prefix}{os}{fips}{stig}-release-{version}-{timestamp}.qcow2"
+const defaultImageNameTemplate = "{prefix}{os}{fips}{stig}{gpu}-release-{version}-{timestamp}.qcow2"
 
 // Smallest build disk for a DISA STIG image: the cloud image's ~10 GB root
 // plus the stig_partition_sizes volumes and at least 10 GB for /var.
@@ -172,7 +204,7 @@ var reYearMonthOS = regexp.MustCompile(`^(.+-)(\d{2})(\d{2})$`)
 // now is replaced in tests.
 var now = time.Now
 
-func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips, stig bool, t time.Time) string {
+func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips, stig bool, gpu string, t time.Time) string {
 	tmpl := d.ImageNameTemplate
 	if tmpl == "" {
 		tmpl = defaultImageNameTemplate
@@ -188,6 +220,7 @@ func defaultImageName(d BuildDefaults, o OSOption, k8sVersion string, fips, stig
 		"{timestamp}", t.UTC().Format("20060102150405"),
 		"{fips}", map[bool]string{true: "-fips"}[fips],
 		"{stig}", map[bool]string{true: "-stig"}[stig],
+		"{gpu}", gpu,
 	).Replace(tmpl)
 }
 
@@ -244,11 +277,40 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	if !ok {
 		errs["os"] = "unsupported operating system"
 	}
+	if g := r.GPU; g != nil {
+		g.Name = strings.TrimSpace(g.Name)
+		g.Mode = strings.ToLower(strings.TrimSpace(g.Mode))
+		if g.Mode == "" {
+			g.Mode = gpuModePassthrough
+		}
+		if g.Name == "" {
+			r.GPU = nil
+		}
+	}
+	if g := r.GPU; g != nil {
+		n := cfg.GPU.NVIDIA
+		switch {
+		case !cfg.GPU.Enabled:
+			errs["gpu"] = "GPU builds are not enabled on this service"
+		case ok && !osOpt.GPUCapable:
+			errs["gpu"] = osOpt.Label + " does not support GPU builds here; use Ubuntu, RHEL 9 or Rocky Linux 9"
+		case !reNutanixRef.MatchString(g.Name):
+			errs["gpu"] = "invalid GPU name"
+		case g.Mode != gpuModePassthrough && g.Mode != gpuModeVGPU:
+			errs["gpu"] = `type must be "passthrough" or "vgpu"`
+		case g.Mode == gpuModeVGPU && r.STIG && n.VGPUDriver.RPM.URL == "":
+			errs["gpu"] = "DISA STIG builds with a vGPU need the vGPU guest driver as an .rpm (gpu.nvidia.vgpuDriver.rpm), which isn't configured; fapolicyd only trusts packaged files"
+		case g.Mode == gpuModeVGPU:
+			if _, ok := n.vgpuDriverFor(r.OS, r.STIG); !ok {
+				errs["gpu"] = "vGPU profiles need the NVIDIA vGPU guest driver, which isn't configured on this service for this OS (gpu.nvidia.vgpuDriver); pick a passthrough GPU"
+			}
+		}
+	}
 	if !reK8sVersion.MatchString(r.KubernetesVersion) {
 		errs["kubernetesVersion"] = "must look like v1.36.1"
 	}
 	if r.ImageName == "" && ok && reK8sVersion.MatchString(r.KubernetesVersion) {
-		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, r.FIPS, r.STIG, now())
+		r.ImageName = defaultImageName(d, osOpt, r.KubernetesVersion, r.FIPS, r.STIG, r.GPU.imageNameSuffix(), now())
 	}
 	if !reImageName.MatchString(r.ImageName) {
 		errs["imageName"] = "1-80 chars: letters, digits, '.', '_' or '-'"
@@ -412,6 +474,16 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 		}
 		if cfg.STIG.RemoteSyslog != "" {
 			vars["stig_remote_syslog"] = cfg.STIG.RemoteSyslog
+		}
+	}
+	if g := r.GPU; g != nil {
+		vars["nutanix_gpu_name"] = g.Name
+		var vgpu *VGPUDriver
+		if d, ok := cfg.GPU.NVIDIA.vgpuDriverFor(r.OS, r.STIG); ok && g.Mode == gpuModeVGPU {
+			vgpu = &d
+		}
+		for k, v := range cfg.GPU.NVIDIA.packerVars(vgpu) {
+			vars[k] = v
 		}
 	}
 	return vars

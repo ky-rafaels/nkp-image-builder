@@ -1,0 +1,39 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# First half of the attached-GPU flow (ansible/gpu-prepare.yml), run after the
+# setup role has brought the OS up to date and before the build reboots into
+# the newest kernel: keep nouveau from claiming the GPU at that boot, so the
+# NVIDIA driver installed by install.yml can load on the same boot.
+---
+- name: Check the OS is supported for an attached GPU
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] in ['Debian', 'RedHat']
+    fail_msg: >-
+      Installing the driver for a GPU attached to the build VM is supported on
+      Ubuntu, RHEL and Rocky Linux, not {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+- name: Block the nouveau driver
+  ansible.builtin.template:
+    src: etc/modprobe.d/blocklist-nouveau.conf
+    dest: /etc/modprobe.d/blocklist-nouveau.conf
+    mode: "0644"
+
+# The initramfs carries modprobe.d, and nouveau would otherwise load from it.
+- name: Rebuild every installed kernel's initramfs without nouveau
+  ansible.builtin.command: >-
+    {{ 'update-initramfs -u -k all' if ansible_facts['os_family'] == 'Debian'
+       else 'dracut --force --regenerate-all' }}
+  changed_when: true

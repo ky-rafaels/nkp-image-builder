@@ -71,28 +71,39 @@ build {
     script          = "./packer/files/stig/stig-partitions.sh"
   }
 
+  # GPU: with a GPU attached (nutanix_gpu_name), upgrade the OS and keep
+  # nouveau off the GPU, then reboot into the newest kernel, so node.yml can
+  # build the NVIDIA driver for the kernel the image boots, load it, and check
+  # it against the GPU with nvidia-smi. No-ops without a GPU.
   provisioner "ansible" {
-    ansible_env_vars = [
-      "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args} -o IdentitiesOnly=yes'"
+    ansible_env_vars = local.ansible_env_vars
+    extra_arguments  = local.ansible_extra_arguments
+    playbook_file    = "./ansible/gpu-prepare.yml"
+    user             = "builder"
+  }
+
+  provisioner "shell" {
+    execute_command   = local.gpu_enabled ? "sudo systemctl reboot" : "true"
+    inline            = ["true"]
+    expect_disconnect = true
+  }
+
+  provisioner "shell" {
+    environment_vars = [
+      "GPU_ENABLED=${local.gpu_enabled}",
+      "GPU_NAME=${var.nutanix_gpu_name}",
     ]
-    extra_arguments = [
-      "--extra-vars", local.ansible_common_vars,
-      "--extra-vars", var.ansible_extra_vars,
-      "--extra-vars", var.ansible_user_vars,
-      # JSON so values with spaces/quotes survive; the grub hash is a
-      # sensitive variable, so Packer redacts it from its output.
-      "--extra-vars", jsonencode({
-        stig_enabled            = var.stig_enabled
-        stig_extra_exceptions   = jsondecode(var.stig_extra_exceptions)
-        stig_remote_syslog      = var.stig_remote_syslog
-        stig_grub_password_hash = var.stig_grub_password_hash
-        # goss runs after the STIG role has fapolicyd enforcing.
-        stig_fapolicyd_build_allow_paths = [local.goss_download_path]
-      }),
-      "--scp-extra-args=${local.ansible_scp_extra_args}",
-    ]
-    playbook_file = "./ansible/node.yml"
-    user          = "builder"
+    execute_command     = "sudo {{.Vars}} -S -E bash '{{.Path}}'"
+    pause_before        = local.gpu_enabled ? "30s" : "0s"
+    start_retry_timeout = "15m"
+    script              = "./packer/files/gpu/check-gpu.sh"
+  }
+
+  provisioner "ansible" {
+    ansible_env_vars = local.ansible_env_vars
+    extra_arguments  = local.ansible_extra_arguments
+    playbook_file    = "./ansible/node.yml"
+    user             = "builder"
   }
 
   provisioner "goss" {
@@ -117,6 +128,7 @@ build {
       containerd_image_pull_progress_timeout = (var.containerd_image_pull_progress_timeout != null ? var.containerd_image_pull_progress_timeout : "")
       containerd_version                     = local.containerd_version
       fips_enabled                           = local.fips_enabled
+      gpu_enabled                            = local.gpu_enabled
       kubernetes_build_metadata              = local.kubernetes_build_metadata
       kubernetes_cni_deb_version             = (var.kubernetes_cni_deb_version != null ? var.kubernetes_cni_deb_version : "")
       kubernetes_cni_rpm_version             = split("-", var.kubernetes_cni_rpm_version != null ? var.kubernetes_cni_rpm_version : "")[0]

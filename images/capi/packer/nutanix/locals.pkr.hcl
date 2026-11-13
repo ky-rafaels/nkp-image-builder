@@ -18,6 +18,9 @@ locals {
   # stig_enabled implies it.
   fips_enabled = var.fips_enabled || var.stig_enabled
 
+  # GPU: see the nutanix_gpu_name and gpu_* variables.
+  gpu_enabled = var.nutanix_gpu_name != ""
+
   # Where the goss provisioner puts its binary (the plugin's default path,
   # made explicit). STIG builds use /opt/image-builder instead, because the
   # STIG remediation mounts /tmp noexec before goss runs, and allow exactly
@@ -70,6 +73,37 @@ locals {
   # via -var-file=ansible-args.json, so it's a local backed by the
   # differently-named ansible_scp_extra_args_env variable instead.
   ansible_scp_extra_args = var.ansible_scp_extra_args_env
+
+  # Shared by both ansible provisioners (gpu-prepare.yml and node.yml).
+  ansible_env_vars = [
+    "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args} -o IdentitiesOnly=yes'"
+  ]
+  ansible_extra_arguments = [
+    "--extra-vars", local.ansible_common_vars,
+    "--extra-vars", var.ansible_extra_vars,
+    "--extra-vars", var.ansible_user_vars,
+    # JSON so values with spaces/quotes survive; the grub hash and the vGPU
+    # license token are sensitive variables, so Packer redacts them from its
+    # output.
+    "--extra-vars", jsonencode({
+      stig_enabled            = var.stig_enabled
+      stig_extra_exceptions   = jsondecode(var.stig_extra_exceptions)
+      stig_remote_syslog      = var.stig_remote_syslog
+      stig_grub_password_hash = var.stig_grub_password_hash
+      # goss runs after the STIG role has fapolicyd enforcing.
+      stig_fapolicyd_build_allow_paths = [local.goss_download_path]
+      gpu_enabled                      = local.gpu_enabled
+      gpu_name                         = var.nutanix_gpu_name
+      gpu_nvidia_driver_branch         = var.gpu_nvidia_driver_branch
+      gpu_nvidia_open_kernel_modules   = var.gpu_nvidia_open_kernel_modules
+      gpu_nvidia_rpm_repo              = var.gpu_nvidia_rpm_repo
+      gpu_nvidia_rpm_gpg_key           = var.gpu_nvidia_rpm_gpg_key
+      gpu_nvidia_vgpu_driver_url       = var.gpu_nvidia_vgpu_driver_url
+      gpu_nvidia_vgpu_driver_sha256    = var.gpu_nvidia_vgpu_driver_sha256
+      gpu_nvidia_vgpu_license_token    = var.gpu_nvidia_vgpu_license_token
+    }),
+    "--scp-extra-args=${local.ansible_scp_extra_args}",
+  ]
 
   # image_name: kept overridable under its ORIGINAL name (see variables.pkr.hcl)
   # so any existing downstream var-file setting it keeps working, falling back

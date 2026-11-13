@@ -1,0 +1,101 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Installs the NVIDIA driver for the GPU attached to the build VM and checks it
+# against that GPU. Runs from node.yml right after the node role (and so the
+# setup role's OS upgrade). ansible/gpu-prepare.yml already upgraded the OS
+# and the build rebooted into the newest kernel, so the running kernel is
+# normally the one the image boots: the driver is built for it, loaded, and
+# nvidia-smi must see the GPU, or the build fails.
+---
+- name: Check the OS is supported for an attached GPU
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] in ['Debian', 'RedHat']
+    fail_msg: >-
+      Installing the driver for a GPU attached to the build VM is supported on
+      Ubuntu, RHEL and Rocky Linux, not {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+# Display (0x0300) and 3D (0x0302) controllers; skips the GPUs' audio functions.
+- name: Find NVIDIA GPUs on the PCI bus
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      for d in /sys/bus/pci/devices/*; do
+        [[ "$(cat "$d/vendor")" == 0x10de && "$(cat "$d/class")" == 0x03* ]] && echo "${d##*/} device $(cat "$d/device")"
+      done | sort
+    executable: /bin/bash
+  register: gpu_nvidia_pci
+  changed_when: false
+  failed_when: false
+
+- name: Fail if no NVIDIA GPU is attached
+  ansible.builtin.fail:
+    msg: >-
+      No NVIDIA GPU is visible in the build VM, although "{{ gpu_name }}" was
+      requested. Only NVIDIA GPUs are supported.
+  when: gpu_nvidia_pci.stdout | trim | length == 0
+
+- name: Find the kernel the image boots by default
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      if command -v grubby >/dev/null 2>&1; then
+        grubby --default-kernel | sed 's|.*/vmlinuz-||'
+      else
+        ls -1 /boot/vmlinuz-* | sed 's|^/boot/vmlinuz-||' | sort -V | tail -n 1
+      fi
+    executable: /bin/bash
+  register: gpu_default_kernel_cmd
+  changed_when: false
+
+- name: Record the kernels to build the driver for
+  ansible.builtin.set_fact:
+    gpu_running_kernel: "{{ ansible_facts['kernel'] }}"
+    gpu_default_kernel: "{{ gpu_default_kernel_cmd.stdout | trim }}"
+    gpu_kernels: "{{ [ansible_facts['kernel'], gpu_default_kernel_cmd.stdout | trim] | unique }}"
+    gpu_vgpu: "{{ gpu_nvidia_vgpu_driver_url | length > 0 }}"
+
+- name: Report what is being installed
+  ansible.builtin.debug:
+    msg: >-
+      GPU "{{ gpu_name }}" ({{ gpu_nvidia_pci.stdout_lines | join(', ') }}):
+      {{ 'vGPU guest driver from ' ~ gpu_nvidia_vgpu_driver_url if gpu_vgpu | bool
+         else 'NVIDIA ' ~ gpu_nvidia_driver_branch ~ ' data center driver ('
+              ~ ('open' if gpu_nvidia_open_kernel_modules | bool else 'proprietary') ~ ' kernel modules)' }}
+      for kernel(s) {{ gpu_kernels | join(', ') }}.
+
+# Only when a newer kernel was released between gpu-prepare.yml and now; the
+# driver is still built for it, but checked against the running kernel only.
+- name: Warn that the image boots a different kernel than the one being checked
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: running {{ gpu_running_kernel }} but the image boots
+      {{ gpu_default_kernel }}; nvidia-smi is checked on the running kernel only.
+  when: gpu_running_kernel != gpu_default_kernel
+
+- name: Install the NVIDIA vGPU guest driver
+  ansible.builtin.include_tasks: nvidia-vgpu.yml
+  when: gpu_vgpu | bool
+
+- name: Install the NVIDIA data center driver (Ubuntu)
+  ansible.builtin.include_tasks: nvidia-datacenter-debian.yml
+  when: not gpu_vgpu | bool and ansible_facts['os_family'] == 'Debian'
+
+- name: Install the NVIDIA data center driver (RHEL/Rocky)
+  ansible.builtin.include_tasks: nvidia-datacenter-redhat.yml
+  when: not gpu_vgpu | bool and ansible_facts['os_family'] == 'RedHat'
+
+- name: Check the driver against the attached GPU
+  ansible.builtin.include_tasks: verify.yml
