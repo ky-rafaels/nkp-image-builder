@@ -130,7 +130,9 @@ catalog:
   # Suggestions in the version picker; users may type any v1.X.Y. Match these
   # to the Kubernetes versions supported by your NKP release.
   kubernetesVersions:
+    - v1.36.2
     - v1.36.1
+    - v1.35.2
     - v1.35.0
     - v1.34.2
 

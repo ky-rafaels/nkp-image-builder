@@ -35,7 +35,7 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Form field | Packer variable(s) |
 |---|---|
 | Operating system | make target `build-nutanix-<id>` (`packer/nutanix/<id>.json`) |
-| Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y-1.1`, `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0` |
+| Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y` (the build installs the newest package revision, e.g. `1.36.2-2.1`), `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0` |
 | Image name | `image_name` (also the build VM name). Blank uses `defaults.imageNameTemplate`, by default `nkp-<os>[-fips][-stig][-gpu\|-vgpu]-release-<version>-<UTC timestamp>.qcow2`, e.g. `nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2` |
 | Cluster / subnet | `nutanix_cluster_name` / `nutanix_subnet_name` |
 | vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb` |

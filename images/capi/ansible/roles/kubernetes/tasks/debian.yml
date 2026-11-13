@@ -29,15 +29,47 @@
 - name: Flush handlers after adding the Kubernetes repo
   ansible.builtin.meta: flush_handlers
 
+# kubernetes_deb_version is either an exact package version (1.36.1-1.1) or
+# just the Kubernetes version (1.36.2). pkgs.k8s.io usually packages a release
+# as <version>-1.1 but sometimes republishes one under a new revision
+# (1.36.2-2.1), so a bare version installs the newest revision the repo has.
+- name: Find the newest package revision of Kubernetes {{ kubernetes_deb_version }}
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      apt-cache madison kubeadm |
+      awk -F'|' -v prefix='{{ kubernetes_deb_version }}-' '{ gsub(/[[:space:]]/, "", $2) } index($2, prefix) == 1 { print $2 }' |
+      sort -V | tail -n 1
+    executable: /bin/bash
+  register: kubernetes_deb_revision
+  changed_when: false
+  when: "'-' not in kubernetes_deb_version"
+
+- name: Fail if the Kubernetes repo has no packages for {{ kubernetes_deb_version }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ kubernetes_deb_repo }} has no kubeadm {{ kubernetes_deb_version }}
+      package. Check the Kubernetes version and kubernetes_series.
+  when:
+    - "'-' not in kubernetes_deb_version"
+    - kubernetes_deb_revision.stdout | trim | length == 0
+
+# kubernetes_deb_version usually arrives as an extra var, which set_fact
+# can't override, so the resolved version gets its own name.
+- name: Set the Kubernetes package version to install
+  ansible.builtin.set_fact:
+    kubernetes_deb_package_version: >-
+      {{ kubernetes_deb_version if '-' in kubernetes_deb_version else kubernetes_deb_revision.stdout | trim }}
+
 - name: Install Kubernetes
   ansible.builtin.apt:
     name: "{{ packages }}"
     allow_downgrade: true
   vars:
     packages:
-      - kubelet={{ kubernetes_deb_version }}
-      - kubeadm={{ kubernetes_deb_version }}
-      - kubectl={{ kubernetes_deb_version }}
+      - kubelet={{ kubernetes_deb_package_version }}
+      - kubeadm={{ kubernetes_deb_package_version }}
+      - kubectl={{ kubernetes_deb_package_version }}
       - kubernetes-cni{{ '=' + kubernetes_cni_deb_version if kubernetes_cni_deb_version else '' }}
   register: apt_lock_status
   until: apt_lock_status is not failed

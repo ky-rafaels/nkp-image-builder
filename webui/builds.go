@@ -436,7 +436,9 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	}
 	set("kubernetes_semver", r.KubernetesVersion)
 	set("kubernetes_series", "v1."+minor)
-	set("kubernetes_deb_version", plain+"-1.1")
+	// No package revision: pkgs.k8s.io sometimes republishes a release under
+	// a new one (1.36.2-2.1), so the build installs the newest it has.
+	set("kubernetes_deb_version", plain)
 	set("kubernetes_rpm_version", plain)
 	// crictl is versioned in lock-step with Kubernetes minors; only default
 	// it when the user hasn't pinned one via extra vars.

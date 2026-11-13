@@ -137,7 +137,7 @@ func TestPackerVars(t *testing.T) {
 	want := map[string]string{
 		"kubernetes_semver":      "v1.34.2",
 		"kubernetes_series":      "v1.34",
-		"kubernetes_deb_version": "1.34.2-1.1",
+		"kubernetes_deb_version": "1.34.2",
 		"kubernetes_rpm_version": "1.34.2",
 		"crictl_version":         "1.34.0",
 		"nutanix_cluster_name":   "pe-01",
