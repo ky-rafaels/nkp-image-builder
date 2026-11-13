@@ -23,8 +23,39 @@
     - lookup('env', 'RHSM_USER') | length > 0
     - lookup('env', 'RHSM_PASS') | length > 0
 
+- name: Download packages in parallel during the build
+  when:
+    - ansible_facts['pkg_mgr'] == 'dnf'
+    - setup_dnf_build_max_parallel_downloads | int > 0
+  block:
+    - name: Read dnf.conf
+      ansible.builtin.slurp:
+        src: /etc/dnf/dnf.conf
+      register: setup_dnf_conf
+
+    # The marker tells the sysprep role this build added the setting, so it
+    # removes only what the build added.
+    - name: Set max_parallel_downloads until sysprep
+      when: setup_dnf_conf.content | b64decode is not search('(?m)^\s*max_parallel_downloads\s*=')
+      block:
+        - name: Set max_parallel_downloads in dnf.conf
+          community.general.ini_file:
+            path: /etc/dnf/dnf.conf
+            section: main
+            option: max_parallel_downloads
+            value: "{{ setup_dnf_build_max_parallel_downloads }}"
+            no_extra_spaces: true
+            mode: "0644"
+
+        - name: Mark max_parallel_downloads as added by the build
+          ansible.builtin.copy:
+            dest: /etc/dnf/.image-builder-max-parallel-downloads
+            content: ""
+            mode: "0600"
+
 - name: Perform dnf clean
   ansible.builtin.command: /usr/bin/yum -y clean all
+  when: setup_dnf_clean | bool
 
 - name: Enable the EPEL repository
   ansible.builtin.command: amazon-linux-extras enable epel

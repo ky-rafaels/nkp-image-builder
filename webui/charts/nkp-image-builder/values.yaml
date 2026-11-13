@@ -77,6 +77,14 @@ defaults:
   cpus: 2
   memoryMB: 4096
   diskSizeGB: 40
+  # Build VM size for DISA STIG and GPU builds, which compile the NVIDIA
+  # driver, rebuild initramfs images and run OpenSCAP and AIDE over the whole
+  # disk. The form switches to it when STIG or a GPU is picked, until the user
+  # edits the size. The build VM is deleted after the build, so this doesn't
+  # change the image. Never smaller than cpus/memoryMB above.
+  largeBuild:
+    cpus: 4
+    memoryMB: 8192
   imageNamePrefix: "nkp-"
   # Default image name when the form's name field is left blank. Placeholders:
   #   {prefix}    imageNamePrefix above

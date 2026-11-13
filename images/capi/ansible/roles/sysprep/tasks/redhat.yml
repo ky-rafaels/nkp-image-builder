@@ -60,6 +60,27 @@
     - name: Clean local subscription data
       ansible.builtin.command: subscription-manager clean
 
+- name: Check for the build's max_parallel_downloads setting
+  ansible.builtin.stat:
+    path: /etc/dnf/.image-builder-max-parallel-downloads
+  register: sysprep_dnf_build_marker
+
+# Added by the setup role for the build only (see its marker task).
+- name: Remove the build's max_parallel_downloads setting
+  when: sysprep_dnf_build_marker.stat.exists
+  block:
+    - name: Remove max_parallel_downloads from dnf.conf
+      community.general.ini_file:
+        path: /etc/dnf/dnf.conf
+        section: main
+        option: max_parallel_downloads
+        state: absent
+
+    - name: Remove the max_parallel_downloads marker
+      ansible.builtin.file:
+        path: /etc/dnf/.image-builder-max-parallel-downloads
+        state: absent
+
 - name: Remove yum package caches
   ansible.builtin.dnf:
     autoremove: true

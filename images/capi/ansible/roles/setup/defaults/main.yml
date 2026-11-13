@@ -37,3 +37,10 @@ setup_block_qemu_hyperv_daemons: >-
   }}
 setup_policy_rc_d_backup: >-
   /tmp/image-builder-policy-rc.d.{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}
+# Parallel package downloads while the image is built (dnf's default is 3).
+# Only added when dnf.conf doesn't set it already, and the sysprep role takes
+# it out again, so the image keeps the distribution's setting. 0 disables.
+setup_dnf_build_max_parallel_downloads: 10
+# `dnf clean all` before upgrading. node.yml turns it off for GPU builds,
+# whose gpu-prepare.yml run of this role refreshed the metadata minutes ago.
+setup_dnf_clean: true

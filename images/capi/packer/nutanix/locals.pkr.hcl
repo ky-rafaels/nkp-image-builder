@@ -75,8 +75,16 @@ locals {
   ansible_scp_extra_args = var.ansible_scp_extra_args_env
 
   # Shared by both ansible provisioners (gpu-prepare.yml and node.yml).
+  # Pipelining runs each task's module over one SSH command instead of
+  # mkdir + copy + chmod + run, and ControlPersist reuses one connection to
+  # Packer's SSH proxy; both matter because a build runs hundreds of tasks.
+  # (Setting ANSIBLE_SSH_ARGS at all replaces Ansible's own default, which is
+  # where ControlPersist normally comes from.) profile_tasks/profile_roles
+  # print each task's duration and the slowest tasks and roles at the end.
   ansible_env_vars = [
-    "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args} -o IdentitiesOnly=yes'"
+    "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args != "" ? var.existing_ansible_ssh_args : "-o ControlMaster=auto -o ControlPersist=60s"} -o IdentitiesOnly=yes'",
+    "ANSIBLE_PIPELINING=True",
+    "ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks,ansible.posix.profile_roles",
   ]
   ansible_extra_arguments = [
     "--extra-vars", local.ansible_common_vars,

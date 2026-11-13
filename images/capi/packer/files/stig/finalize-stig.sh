@@ -148,7 +148,10 @@ if [[ -x /usr/local/sbin/grow-var-lv ]]; then
   echo "OK: grow-var-lv runs under fapolicyd."
 fi
 
-section "Rebuilding the AIDE baseline"
+# The only AIDE baseline the build makes: the STIG role leaves
+# aide_build_database out of the provisioning pass (stig_build_phase_skip), so
+# the whole filesystem is hashed once, after everything else has changed it.
+section "Building the AIDE baseline"
 aide --init >/dev/null
 mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
 

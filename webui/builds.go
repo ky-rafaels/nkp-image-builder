@@ -244,12 +244,6 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	if r.SubnetName == "" {
 		r.SubnetName = d.SubnetName
 	}
-	if r.CPUs == 0 {
-		r.CPUs = d.CPUs
-	}
-	if r.MemoryMB == 0 {
-		r.MemoryMB = d.MemoryMB
-	}
 	if r.DiskSizeGB == 0 {
 		r.DiskSizeGB = d.DiskSizeGB
 	}
@@ -286,6 +280,14 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		if g.Name == "" {
 			r.GPU = nil
 		}
+	}
+	// Once STIG and the GPU are settled: those builds get a bigger build VM.
+	size := d.vmSize(r.STIG || r.GPU != nil)
+	if r.CPUs == 0 {
+		r.CPUs = size.CPUs
+	}
+	if r.MemoryMB == 0 {
+		r.MemoryMB = size.MemoryMB
 	}
 	if g := r.GPU; g != nil {
 		n := cfg.GPU.NVIDIA
@@ -593,6 +595,9 @@ func buildObjects(cfg *Config, req *BuildRequest, id string) (*corev1.ConfigMap,
 		{Name: "ANSIBLE_NOCOLOR", Value: "1"},
 		{Name: "ANSIBLE_FORCE_COLOR", Value: "0"},
 		{Name: "CHECKPOINT_DISABLE", Value: "1"},
+		// Timestamps every line of Packer's output, so the log shows how long
+		// each phase took (the Makefile appends its own flags to this).
+		{Name: "PACKER_FLAGS", Value: "-timestamp-ui"},
 	}
 	env = append(env, cfg.Builder.ExtraEnv...)
 

@@ -261,7 +261,12 @@ type BuildDefaults struct {
 	CPUs              int    `json:"cpus"`
 	MemoryMB          int    `json:"memoryMB"`
 	DiskSizeGB        int    `json:"diskSizeGB"`
-	ImageNamePrefix   string `json:"imageNamePrefix"`
+	// LargeBuild sizes the build VM for DISA STIG and GPU builds, which
+	// compile the NVIDIA driver, rebuild initramfs images and run OpenSCAP
+	// and AIDE over the whole disk. The build VM is deleted afterwards, so
+	// its size isn't part of the image. Never smaller than CPUs/MemoryMB.
+	LargeBuild      VMSize `json:"largeBuild"`
+	ImageNamePrefix string `json:"imageNamePrefix"`
 	// ImageNameTemplate builds the default image name. Placeholders:
 	// {prefix} ImageNamePrefix, {os} OSOption.ImageNameOS (e.g. ubuntu-24.04),
 	// {version} Kubernetes version without the "v" (e.g. 1.36.1),
@@ -402,6 +407,32 @@ func (c *Config) applyDefaults() {
 	if d.DiskSizeGB == 0 {
 		d.DiskSizeGB = 40
 	}
+	if d.LargeBuild.CPUs == 0 {
+		d.LargeBuild.CPUs = defaultLargeBuildCPUs
+	}
+	if d.LargeBuild.MemoryMB == 0 {
+		d.LargeBuild.MemoryMB = defaultLargeBuildMemoryMB
+	}
+	d.LargeBuild.CPUs = max(d.LargeBuild.CPUs, d.CPUs)
+	d.LargeBuild.MemoryMB = max(d.LargeBuild.MemoryMB, d.MemoryMB)
+}
+
+type VMSize struct {
+	CPUs     int `json:"cpus"`
+	MemoryMB int `json:"memoryMB"`
+}
+
+const (
+	defaultLargeBuildCPUs     = 4
+	defaultLargeBuildMemoryMB = 8192
+)
+
+// vmSize is the default build VM size for a request.
+func (d BuildDefaults) vmSize(large bool) VMSize {
+	if large {
+		return d.LargeBuild
+	}
+	return VMSize{CPUs: d.CPUs, MemoryMB: d.MemoryMB}
 }
 
 func (c *Config) osByID(id string) (OSOption, bool) {

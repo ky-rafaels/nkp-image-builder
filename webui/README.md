@@ -38,7 +38,7 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y` (the build installs the newest package revision, e.g. `1.36.2-2.1`), `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0` |
 | Image name | `image_name` (also the build VM name). Blank uses `defaults.imageNameTemplate`, by default `nkp-<os>[-fips][-stig][-gpu\|-vgpu]-release-<version>-<UTC timestamp>.qcow2`, e.g. `nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2` |
 | Cluster / subnet | `nutanix_cluster_name` / `nutanix_subnet_name` |
-| vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb` |
+| vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb`. STIG and GPU builds default to `defaults.largeBuild` (4 vCPU, 8192 MB) instead of `defaults.cpus`/`memoryMB`. |
 | Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
 | Source image: Prism Central image | `source_image_uuid` if the value is a UUID, otherwise `source_image_name`. The build boots from that existing image and never modifies or deletes it. |
 | Source image: download URL | `image_url` |

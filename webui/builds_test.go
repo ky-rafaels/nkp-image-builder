@@ -55,6 +55,41 @@ func TestNormalizeDefaults(t *testing.T) {
 	}
 }
 
+func TestLargeBuildSize(t *testing.T) {
+	cfg := testConfig()
+	cfg.GPU.Enabled = true
+	cfg.Catalog.OperatingSystems[0].GPUCapable = true
+	for name, tc := range map[string]struct {
+		req          BuildRequest
+		cpus, memory int
+	}{
+		"plain":             {BuildRequest{OS: "rockylinux-9"}, 2, 4096},
+		"fips only":         {BuildRequest{OS: "rockylinux-9", FIPS: true}, 2, 4096},
+		"stig":              {BuildRequest{OS: "rockylinux-9", STIG: true}, 4, 8192},
+		"gpu":               {BuildRequest{OS: "ubuntu-2204", GPU: &GPURequest{Name: "NVIDIA L40S"}}, 4, 8192},
+		"blank gpu name":    {BuildRequest{OS: "ubuntu-2204", GPU: &GPURequest{Name: " "}}, 2, 4096},
+		"explicit size":     {BuildRequest{OS: "rockylinux-9", STIG: true, CPUs: 2, MemoryMB: 6144}, 2, 6144},
+		"explicit cpu only": {BuildRequest{OS: "rockylinux-9", STIG: true, CPUs: 8}, 8, 8192},
+	} {
+		r := tc.req
+		r.KubernetesVersion = "v1.36.2"
+		if err := r.normalize(cfg); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if r.CPUs != tc.cpus || r.MemoryMB != tc.memory {
+			t.Errorf("%s: got %d vCPU / %d MB, want %d / %d", name, r.CPUs, r.MemoryMB, tc.cpus, tc.memory)
+		}
+	}
+
+	// largeBuild never shrinks the build VM below the regular defaults.
+	small := testConfig()
+	small.Defaults = BuildDefaults{CPUs: 8, MemoryMB: 16384, LargeBuild: VMSize{CPUs: 4, MemoryMB: 8192}}
+	small.applyDefaults()
+	if got := small.Defaults.LargeBuild; got != (VMSize{CPUs: 8, MemoryMB: 16384}) {
+		t.Errorf("largeBuild = %+v, want at least the regular defaults", got)
+	}
+}
+
 func TestDefaultImageName(t *testing.T) {
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	d := BuildDefaults{ImageNamePrefix: "nkp-"}

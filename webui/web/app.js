@@ -11,6 +11,8 @@ const state = {
   // GPUs on the build cluster, from Prism Central (GET /api/gpus).
   gpus: { cluster: null, list: null, error: null, loading: false, seq: 0, renderKey: "" },
   gpuTimer: null,
+  // The user typed a vCPU or memory size, so the form stops picking one.
+  sizeEdited: false,
 };
 
 async function api(path, opts = {}) {
@@ -104,6 +106,10 @@ async function loadConfig() {
   f.cpus.value = d.cpus;
   f.memoryMB.value = d.memoryMB;
   f.diskSizeGB.value = d.diskSizeGB;
+  const large = d.largeBuild;
+  $("#size-hint").textContent = large && (large.cpus !== d.cpus || large.memoryMB !== d.memoryMB)
+    ? `STIG and GPU builds start at ${large.cpus} vCPU, ${large.memoryMB} MB`
+    : "";
   f.httpProxy.value = d.httpProxy || "";
   f.httpsProxy.value = d.httpsProxy || "";
   f.noProxy.value = d.noProxy || "";
@@ -137,6 +143,12 @@ function onFormChange() {
     ? "FIPS kernel mode and crypto policy, with FIPS builds of Kubernetes, containerd and runc."
     : `Not available for ${os.label}. FIPS builds are supported on RHEL 9 and Rocky Linux 9.`;
   const d = state.config.defaults;
+  // STIG and GPU builds get a bigger build VM, until the user sets the size.
+  if (!state.sizeEdited) {
+    const size = (stigSelected() || gpuSelected()) && d.largeBuild ? d.largeBuild : d;
+    f.cpus.value = size.cpus;
+    f.memoryMB.value = size.memoryMB;
+  }
   const version = f.kubernetesVersion.value.trim().replace(/^v/, "") || "…";
   $("#image-name-default").textContent = (d.imageNameTemplate || "")
     .replaceAll("{prefix}", d.imageNamePrefix || "")
@@ -611,6 +623,10 @@ async function onCancel() {
 document.addEventListener("DOMContentLoaded", async () => {
   const f = $("#build-form");
   f.addEventListener("submit", onSubmit);
+  // Before the form's own listener, which reads sizeEdited.
+  for (const name of ["cpus", "memoryMB"]) {
+    f.elements.namedItem(name).addEventListener("input", () => { state.sizeEdited = true; });
+  }
   f.addEventListener("input", onFormChange);
   f.addEventListener("change", onFormChange);
   $("#refresh").addEventListener("click", refreshBuilds);
