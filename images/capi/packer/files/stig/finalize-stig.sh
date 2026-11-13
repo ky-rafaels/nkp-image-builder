@@ -57,10 +57,53 @@ rm -f /etc/fapolicyd/rules.d/36-image-builder-build.rules
 rm -rf /tmp/goss /tmp/goss-* /tmp/goss-spec.yaml /opt/image-builder
 fagenrules --load
 systemctl restart fapolicyd
-for _ in $(seq 1 30); do systemctl is-active --quiet fapolicyd && break; sleep 1; done
+
+section "Waiting for fapolicyd to enforce"
+# fapolicyd forks, and systemd reports it active, before it loads its trust
+# database from the RPM database and starts listening for events; until then
+# it denies nothing. A bigger RPM database takes longer (a GPU build adds
+# kernel-devel, the compiler toolchain and the NVIDIA driver), so wait until an
+# untrusted executable is actually denied before testing anything under it.
+# Not /tmp or /var/tmp: they are mounted noexec, which would deny it without
+# fapolicyd.
+denied=/opt/.stig-fapolicyd-probe
+probes=()
+created_dirs=()
+cleanup_probes() {
+  rm -f "${probes[@]}" "${denied}"
+  for d in "${created_dirs[@]}"; do rmdir "${d}" 2>/dev/null || true; done
+}
+trap cleanup_probes EXIT
+run_unprivileged() { LC_ALL=C setpriv --reuid=65534 --regid=65534 --clear-groups "$1"; }
+# True only when fapolicyd denied the exec (EPERM), not for any other failure.
+denied_by_fapolicyd() {
+  local out
+  if out="$(run_unprivileged "$1" 2>&1)"; then
+    last_probe_output="(it ran)"
+    return 1
+  fi
+  last_probe_output="${out}"
+  [[ "${out}" == *"Operation not permitted"* ]]
+}
+cp /usr/bin/true "${denied}"
+chmod 0755 "${denied}"
+fapolicyd_timeout=600
+last_probe_output="(it ran)"
+for ((waited = 0; ; waited++)); do
+  systemctl is-active --quiet fapolicyd || { echo "fapolicyd is not running" >&2; exit 1; }
+  denied_by_fapolicyd "${denied}" && break
+  if ((waited >= fapolicyd_timeout)); then
+    echo "fapolicyd did not deny an untrusted executable within ${fapolicyd_timeout}s of starting; deny-by-default is not in effect. Last attempt: ${last_probe_output}" >&2
+    journalctl -u fapolicyd -b --no-pager -n 20 >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
+echo "OK: fapolicyd denies untrusted executables (enforcing ${waited}s after restart)."
 
 section "Checking the container runtime under fapolicyd"
-systemctl is-active --quiet fapolicyd || { echo "fapolicyd is not running" >&2; exit 1; }
+# Earlier steps change containerd's drop-ins (sysprep removes the proxy one).
+systemctl daemon-reload
 systemctl restart containerd
 CTR=/usr/local/bin/ctr
 for _ in $(seq 1 30); do "${CTR}" version >/dev/null 2>&1 && break; sleep 1; done
@@ -76,8 +119,6 @@ fi
 # directories 35-kubernetes.rules allows (CNI plugins, kubelet credential
 # providers) but nothing untrusted elsewhere.
 allowed_dirs=(/opt/cni/bin /etc/kubernetes/image-credential-provider)
-created_dirs=()
-probes=()
 for d in "${allowed_dirs[@]}"; do
   if [[ ! -d "${d}" ]]; then
     mkdir -p "${d}"
@@ -85,24 +126,16 @@ for d in "${allowed_dirs[@]}"; do
   fi
   probes+=("${d}/.stig-fapolicyd-probe")
 done
-# Not /tmp or /var/tmp: they are mounted noexec, which would deny it without
-# fapolicyd.
-denied=/opt/.stig-fapolicyd-probe
-cleanup_probes() {
-  rm -f "${probes[@]}" "${denied}"
-  for d in "${created_dirs[@]}"; do rmdir "${d}" 2>/dev/null || true; done
-}
-trap cleanup_probes EXIT
-for p in "${probes[@]}" "${denied}"; do
+for p in "${probes[@]}"; do
   cp /usr/bin/true "${p}"
   chmod 0755 "${p}"
 done
 for p in "${probes[@]}"; do
-  setpriv --reuid=65534 --regid=65534 --clear-groups "${p}" ||
+  run_unprivileged "${p}" ||
     { echo "fapolicyd blocks executables in ${p%/*}; Kubernetes would not run them" >&2; exit 1; }
 done
-if setpriv --reuid=65534 --regid=65534 --clear-groups "${denied}" 2>/dev/null; then
-  echo "fapolicyd allowed an untrusted executable; deny-by-default is not in effect" >&2
+if ! denied_by_fapolicyd "${denied}"; then
+  echo "fapolicyd allowed an untrusted executable; deny-by-default is not in effect. Last attempt: ${last_probe_output}" >&2
   exit 1
 fi
 cleanup_probes
