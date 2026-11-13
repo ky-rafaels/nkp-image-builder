@@ -1,5 +1,6 @@
 {
   "build_name": "ubuntu-2604",
+  "containerd_enable_limit_no_file": "true",
   "distro_name": "ubuntu",
   "guest_os_type": "Linux",
   "image_url": "https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img",
