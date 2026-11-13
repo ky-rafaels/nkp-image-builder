@@ -68,8 +68,14 @@ type prismClient struct {
 	ttl      time.Duration
 
 	mu       sync.Mutex
-	hosts    []v3Host
+	inv      *inventory
 	cachedAt time.Time
+}
+
+// inventory is what GPU discovery reads from Prism Central.
+type inventory struct {
+	clusters []v3Cluster
+	hosts    []v3Host
 }
 
 // newPrismClientFromEnv uses the same NUTANIX_* variables as the builds.
@@ -106,9 +112,30 @@ func newPrismClientFromEnv() (*prismClient, error) {
 	}, nil
 }
 
+type v3Cluster struct {
+	Metadata struct {
+		UUID string `json:"uuid"`
+	} `json:"metadata"`
+	Spec struct {
+		Name string `json:"name"`
+	} `json:"spec"`
+	Status struct {
+		Name string `json:"name"`
+	} `json:"status"`
+}
+
+func (c *v3Cluster) name() string {
+	if c.Status.Name != "" {
+		return c.Status.Name
+	}
+	return c.Spec.Name
+}
+
 type v3Host struct {
 	Status struct {
-		Name             string `json:"name"`
+		Name string `json:"name"`
+		// Prism Central sends only kind and uuid here, not the cluster's
+		// name: hosts are matched to the cluster by UUID.
 		ClusterReference *struct {
 			Name string `json:"name"`
 			UUID string `json:"uuid"`
@@ -127,35 +154,50 @@ type v3GPU struct {
 	Assignable bool   `json:"assignable"`
 }
 
-type v3HostList struct {
-	Entities []v3Host `json:"entities"`
+type v3List[T any] struct {
+	Entities []T `json:"entities"`
 	Metadata struct {
 		TotalMatches int `json:"total_matches"`
 	} `json:"metadata"`
 }
 
 func (p *prismClient) ClusterGPUs(ctx context.Context, cluster string) (*ClusterGPUs, error) {
-	hosts, err := p.listHosts(ctx)
+	inv, err := p.inventory(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return aggregateGPUs(hosts, cluster), nil
+	return aggregateGPUs(inv, cluster), nil
 }
 
-// listHosts returns every host Prism Central knows, cached briefly so the
-// form and the create preflight don't each page through the API.
-func (p *prismClient) listHosts(ctx context.Context) ([]v3Host, error) {
+// inventory returns every cluster and host Prism Central knows, cached
+// briefly so the form and the create preflight don't each page through the
+// API.
+func (p *prismClient) inventory(ctx context.Context) (*inventory, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.hosts != nil && time.Since(p.cachedAt) < p.ttl {
-		return p.hosts, nil
+	if p.inv != nil && time.Since(p.cachedAt) < p.ttl {
+		return p.inv, nil
 	}
+	clusters, err := listAll[v3Cluster](ctx, p, "cluster")
+	if err != nil {
+		return nil, err
+	}
+	hosts, err := listAll[v3Host](ctx, p, "host")
+	if err != nil {
+		return nil, err
+	}
+	p.inv, p.cachedAt = &inventory{clusters: clusters, hosts: hosts}, time.Now()
+	return p.inv, nil
+}
+
+// listAll pages through a v3 list API (/api/nutanix/v3/<kind>s/list).
+func listAll[T any](ctx context.Context, p *prismClient, kind string) ([]T, error) {
 	const pageSize, maxPages = 100, 50
-	var all []v3Host
+	var all []T
 	for page := 0; page < maxPages; page++ {
-		var resp v3HostList
-		body := map[string]any{"kind": "host", "length": pageSize, "offset": len(all)}
-		if err := p.post(ctx, "/api/nutanix/v3/hosts/list", body, &resp); err != nil {
+		var resp v3List[T]
+		body := map[string]any{"kind": kind, "length": pageSize, "offset": len(all)}
+		if err := p.post(ctx, "/api/nutanix/v3/"+kind+"s/list", body, &resp); err != nil {
 			return nil, err
 		}
 		all = append(all, resp.Entities...)
@@ -163,7 +205,6 @@ func (p *prismClient) listHosts(ctx context.Context) ([]v3Host, error) {
 			break
 		}
 	}
-	p.hosts, p.cachedAt = all, time.Now()
 	return all, nil
 }
 
@@ -196,18 +237,33 @@ func (p *prismClient) post(ctx context.Context, path string, body, out any) erro
 		return fmt.Errorf("Prism Central %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(out); err != nil {
-		return fmt.Errorf("reading Prism Central's host list: %w", err)
+		return fmt.Errorf("reading Prism Central's %s response: %w", path, err)
 	}
 	return nil
 }
 
-// aggregateGPUs groups a cluster's GPUs by name and mode.
-func aggregateGPUs(hosts []v3Host, cluster string) *ClusterGPUs {
+// aggregateGPUs groups a cluster's GPUs by name and mode. cluster is the
+// cluster's name or UUID.
+func aggregateGPUs(inv *inventory, cluster string) *ClusterGPUs {
 	out := &ClusterGPUs{Cluster: cluster, GPUs: []ClusterGPU{}}
+	// Hosts only carry their cluster's UUID, so resolve the name first.
+	uuids := map[string]bool{}
+	for i := range inv.clusters {
+		c := &inv.clusters[i]
+		if c.Metadata.UUID != "" && (strings.EqualFold(c.name(), cluster) || strings.EqualFold(c.Metadata.UUID, cluster)) {
+			uuids[strings.ToLower(c.Metadata.UUID)] = true
+			out.ClusterFound = true
+		}
+	}
 	byKey := map[string]*ClusterGPU{}
-	for _, h := range hosts {
+	for _, h := range inv.hosts {
 		ref := h.Status.ClusterReference
-		if ref == nil || !(strings.EqualFold(ref.Name, cluster) || strings.EqualFold(ref.UUID, cluster)) {
+		if ref == nil {
+			continue
+		}
+		inCluster := (ref.UUID != "" && (uuids[strings.ToLower(ref.UUID)] || strings.EqualFold(ref.UUID, cluster))) ||
+			(ref.Name != "" && strings.EqualFold(ref.Name, cluster))
+		if !inCluster {
 			continue
 		}
 		out.ClusterFound = true

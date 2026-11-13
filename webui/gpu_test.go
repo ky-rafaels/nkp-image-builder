@@ -141,13 +141,21 @@ func TestLoadConfigValidatesGPU(t *testing.T) {
 	}
 }
 
-// fakePrism serves the v3 hosts list two hosts per page, like a paging
-// Prism Central.
-func fakePrism(t *testing.T, hosts []map[string]any, calls *atomic.Int32, status int) *httptest.Server {
+// fakePrism serves the v3 clusters and hosts lists two entities per page,
+// like a paging Prism Central.
+func fakePrism(t *testing.T, clusters, hosts []map[string]any, calls *atomic.Int32, status int) *httptest.Server {
 	t.Helper()
+	lists := map[string]struct {
+		kind     string
+		entities []map[string]any
+	}{
+		"/api/nutanix/v3/clusters/list": {"cluster", clusters},
+		"/api/nutanix/v3/hosts/list":    {"host", hosts},
+	}
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Method != http.MethodPost || r.URL.Path != "/api/nutanix/v3/hosts/list" {
+		list, ok := lists[r.URL.Path]
+		if r.Method != http.MethodPost || !ok {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Basic "+base64.StdEncoding.EncodeToString([]byte("svc:pw")) {
@@ -162,21 +170,31 @@ func fakePrism(t *testing.T, hosts []map[string]any, calls *atomic.Int32, status
 			Offset int    `json:"offset"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Kind != "host" {
-			t.Errorf("kind = %q", body.Kind)
+		if body.Kind != list.kind {
+			t.Errorf("%s: kind = %q", r.URL.Path, body.Kind)
 		}
-		end := min(body.Offset+2, len(hosts))
+		end := min(body.Offset+2, len(list.entities))
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"entities": hosts[body.Offset:end],
-			"metadata": map[string]any{"total_matches": len(hosts)},
+			"entities": list.entities[body.Offset:end],
+			"metadata": map[string]any{"total_matches": len(list.entities)},
 		})
 	}))
 }
 
+func cluster(name string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"kind": "cluster", "uuid": "uuid-" + name},
+		"spec":     map[string]any{"name": name},
+		"status":   map[string]any{"name": name},
+	}
+}
+
+// host's cluster_reference is what Prism Central really sends: kind and
+// uuid, no name.
 func host(cluster string, gpus ...map[string]any) map[string]any {
 	return map[string]any{"status": map[string]any{
 		"name":              "host",
-		"cluster_reference": map[string]any{"kind": "cluster", "name": cluster, "uuid": "uuid-" + cluster},
+		"cluster_reference": map[string]any{"kind": "cluster", "uuid": "uuid-" + cluster},
 		"resources":         map[string]any{"gpu_list": gpus},
 	}}
 }
@@ -193,8 +211,9 @@ func TestPrismClientClusterGPUs(t *testing.T) {
 		host("other", gpu("Tesla T4", "kNvidia", "PASSTHROUGH_COMPUTE", true)),
 		map[string]any{"status": map[string]any{"name": "orphan"}}, // no cluster reference
 	}
+	clusters := []map[string]any{cluster("Prism-Central"), cluster("SA-GPU"), cluster("other")}
 	var calls atomic.Int32
-	srv := fakePrism(t, hosts, &calls, http.StatusOK)
+	srv := fakePrism(t, clusters, hosts, &calls, http.StatusOK)
 	defer srv.Close()
 	pc := &prismClient{baseURL: srv.URL, username: "svc", password: "pw", http: srv.Client(), ttl: time.Minute}
 
@@ -214,21 +233,28 @@ func TestPrismClientClusterGPUs(t *testing.T) {
 			t.Errorf("gpu %d = %+v, want %+v", i, got.GPUs[i], want[i])
 		}
 	}
-	if n := calls.Load(); n != 3 {
-		t.Errorf("expected 3 pages, got %d requests", n)
+	if n := calls.Load(); n != 5 {
+		t.Errorf("expected 2 cluster pages + 3 host pages, got %d requests", n)
 	}
-	// Cached: other clusters come from the same host list.
-	other, err := pc.ClusterGPUs(context.Background(), "other")
-	if err != nil || len(other.GPUs) != 1 || other.GPUs[0].Name != "Tesla T4" || calls.Load() != 3 {
-		t.Errorf("other = %+v, err %v, calls %d", other, err, calls.Load())
+	// Cached: other clusters come from the same lists, by name or UUID.
+	for _, ref := range []string{"other", "UUID-other"} {
+		other, err := pc.ClusterGPUs(context.Background(), ref)
+		if err != nil || !other.ClusterFound || len(other.GPUs) != 1 || other.GPUs[0].Name != "Tesla T4" || calls.Load() != 5 {
+			t.Errorf("%s = %+v, err %v, calls %d", ref, other, err, calls.Load())
+		}
 	}
 	missing, _ := pc.ClusterGPUs(context.Background(), "nope")
 	if missing.ClusterFound || missing.GPUs == nil {
 		t.Errorf("missing cluster = %+v (GPUs must encode as [], not null)", missing)
 	}
+	// A cluster without GPUs is found, with an empty list.
+	none, _ := pc.ClusterGPUs(context.Background(), "prism-central")
+	if !none.ClusterFound || len(none.GPUs) != 0 {
+		t.Errorf("cluster without GPUs = %+v", none)
+	}
 
 	var bad atomic.Int32
-	denied := fakePrism(t, nil, &bad, http.StatusUnauthorized)
+	denied := fakePrism(t, nil, nil, &bad, http.StatusUnauthorized)
 	defer denied.Close()
 	pc = &prismClient{baseURL: denied.URL, username: "svc", password: "pw", http: denied.Client(), ttl: time.Minute}
 	if _, err := pc.ClusterGPUs(context.Background(), "SA-GPU"); err == nil || !strings.Contains(err.Error(), "rejected the credentials") {
