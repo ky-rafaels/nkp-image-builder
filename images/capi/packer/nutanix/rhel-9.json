@@ -1,5 +1,6 @@
 {
   "build_name": "rhel-9",
+  "containerd_enable_limit_no_file": "true",
   "distribution_version": "9",
   "distro_name": "rhel",
   "epel_rpm_gpg_key": "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9",

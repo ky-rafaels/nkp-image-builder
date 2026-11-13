@@ -1,6 +1,7 @@
 {
   "boot_type": "uefi",
   "build_name": "rockylinux-9",
+  "containerd_enable_limit_no_file": "true",
   "distribution": "rockylinux",
   "distribution_release": "Core",
   "distribution_version": "9",
