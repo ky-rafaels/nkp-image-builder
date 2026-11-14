@@ -85,9 +85,18 @@ locals {
   # reach Ansible literally, and ansible-core >= 2.15 then passes everything
   # inside them to ssh as one argument ("-o A=1 -o B=2" -> one -o), which
   # ssh rejects as soon as there is more than one option.
+  # A remote tmp dir per user: ansible.cfg's remote_tmp is one shared
+  # /tmp/.ansible, and with pipelining a module running as root (become)
+  # can be the first to need it and creates it root-owned 0700; the next task
+  # that uploads a file (copy, template) then can't create its tmp dir there
+  # as the SSH user. $USER is expanded on the VM, by the SSH user's shell and
+  # by the module under sudo, so they get /tmp/.ansible-builder and
+  # /tmp/.ansible-root. (Written as $USER without braces, which HCL would
+  # try to interpolate.)
   ansible_env_vars = [
     "ANSIBLE_SSH_ARGS=${var.existing_ansible_ssh_args != "" ? var.existing_ansible_ssh_args : "-o ControlMaster=auto -o ControlPersist=60s"} -o IdentitiesOnly=yes",
     "ANSIBLE_PIPELINING=True",
+    "ANSIBLE_REMOTE_TMP=/tmp/.ansible-$USER",
     "ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks,ansible.posix.profile_roles",
   ]
   ansible_extra_arguments = [
