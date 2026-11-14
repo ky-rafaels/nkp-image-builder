@@ -81,8 +81,12 @@ locals {
   # (Setting ANSIBLE_SSH_ARGS at all replaces Ansible's own default, which is
   # where ControlPersist normally comes from.) profile_tasks/profile_roles
   # print each task's duration and the slowest tasks and roles at the end.
+  # No quotes around the value: Packer sets these without a shell, so quotes
+  # reach Ansible literally, and ansible-core >= 2.15 then passes everything
+  # inside them to ssh as one argument ("-o A=1 -o B=2" -> one -o), which
+  # ssh rejects as soon as there is more than one option.
   ansible_env_vars = [
-    "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args != "" ? var.existing_ansible_ssh_args : "-o ControlMaster=auto -o ControlPersist=60s"} -o IdentitiesOnly=yes'",
+    "ANSIBLE_SSH_ARGS=${var.existing_ansible_ssh_args != "" ? var.existing_ansible_ssh_args : "-o ControlMaster=auto -o ControlPersist=60s"} -o IdentitiesOnly=yes",
     "ANSIBLE_PIPELINING=True",
     "ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks,ansible.posix.profile_roles",
   ]
