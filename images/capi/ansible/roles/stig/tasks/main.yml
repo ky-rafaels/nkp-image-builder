@@ -135,6 +135,14 @@
   loop: "{{ stig_untrusted_executables.stdout_lines }}"
   changed_when: true
 
+- name: Let runc's sealed re-exec load its libraries under fapolicyd
+  ansible.builtin.copy:
+    src: 25-runc.rules
+    dest: /etc/fapolicyd/rules.d/25-runc.rules
+    owner: root
+    group: fapolicyd
+    mode: "0644"
+
 - name: Allow runtime-installed CNI and kubelet plugins in fapolicyd
   ansible.builtin.copy:
     src: 35-kubernetes.rules
