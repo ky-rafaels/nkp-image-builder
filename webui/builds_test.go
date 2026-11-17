@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,38 @@ func TestNormalizeDefaults(t *testing.T) {
 	}
 	if r.ClusterName != "pe-01" || r.SubnetName != "vlan-100" || r.CPUs != 2 || r.MemoryMB != 4096 || r.DiskSizeGB != 40 {
 		t.Errorf("defaults not applied: %+v", r)
+	}
+}
+
+func TestKubernetesVersionDefaults(t *testing.T) {
+	cfg := testConfig()
+	if got := cfg.Catalog.KubernetesVersions; !slices.Equal(got, []string{"v1.36.2", "v1.35.2"}) {
+		t.Errorf("kubernetesVersions = %v, want the built-in dropdown", got)
+	}
+	if got := cfg.Defaults.KubernetesVersion; got != "v1.36.2" {
+		t.Errorf("default version = %q, want v1.36.2", got)
+	}
+	r := &BuildRequest{OS: "ubuntu-2204"}
+	if err := r.normalize(cfg); err != nil || r.KubernetesVersion != "v1.36.2" {
+		t.Errorf("blank request version = %q (%v), want v1.36.2", r.KubernetesVersion, err)
+	}
+	// Versions outside the dropdown still build.
+	r = &BuildRequest{OS: "ubuntu-2204", KubernetesVersion: "v1.33.5"}
+	if err := r.normalize(cfg); err != nil {
+		t.Errorf("unlisted version: %v", err)
+	}
+
+	// A configured list replaces the built-in one and its first entry is
+	// preselected, unless defaults.kubernetesVersion names one.
+	own := &Config{Catalog: CatalogConfig{KubernetesVersions: []string{"v1.34.2", "v1.33.5"}}}
+	own.applyDefaults()
+	if got := own.Defaults.KubernetesVersion; got != "v1.34.2" || len(own.Catalog.KubernetesVersions) != 2 {
+		t.Errorf("configured list: default %q, list %v", got, own.Catalog.KubernetesVersions)
+	}
+	own = &Config{Defaults: BuildDefaults{KubernetesVersion: "v1.33.5"}}
+	own.applyDefaults()
+	if got := own.Defaults.KubernetesVersion; got != "v1.33.5" {
+		t.Errorf("configured default = %q, want v1.33.5", got)
 	}
 }
 

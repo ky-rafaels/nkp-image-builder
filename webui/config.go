@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -302,9 +303,15 @@ type OSOption struct {
 }
 
 type CatalogConfig struct {
-	OperatingSystems   []OSOption `json:"operatingSystems"`
-	KubernetesVersions []string   `json:"kubernetesVersions"`
+	OperatingSystems []OSOption `json:"operatingSystems"`
+	// KubernetesVersions are the versions in the form's dropdown, newest
+	// first. Users can still pick "Other version…" and type any v1.X.Y.
+	KubernetesVersions []string `json:"kubernetesVersions"`
 }
+
+// defaultKubernetesVersions fill the version dropdown when the config lists
+// none.
+var defaultKubernetesVersions = []string{"v1.36.2", "v1.35.2"}
 
 type FeatureConfig struct {
 	// Let users enter their own Prism Central credentials per build instead
@@ -395,8 +402,12 @@ func (c *Config) applyDefaults() {
 	if d.ImageNameTemplate == "" {
 		d.ImageNameTemplate = defaultImageNameTemplate
 	}
+	if len(c.Catalog.KubernetesVersions) == 0 {
+		c.Catalog.KubernetesVersions = slices.Clone(defaultKubernetesVersions)
+	}
+	// The preselected version is the first one in the dropdown.
 	if d.KubernetesVersion == "" {
-		d.KubernetesVersion = "v1.36.1"
+		d.KubernetesVersion = c.Catalog.KubernetesVersions[0]
 	}
 	if d.CPUs == 0 {
 		d.CPUs = 2

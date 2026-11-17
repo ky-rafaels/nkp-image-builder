@@ -73,7 +73,9 @@ nutanix:
 defaults:
   clusterName: "SA-GPU"        # Prism Element cluster to build on
   subnetName: "primary"         # subnet for the build VM; must be reachable via SSH from build pods
-  kubernetesVersion: v1.36.1
+  # Preselected in the version dropdown. Blank uses the first of
+  # catalog.kubernetesVersions.
+  kubernetesVersion: ""
   cpus: 2
   memoryMB: 4096
   diskSizeGB: 40
@@ -135,14 +137,12 @@ catalog:
       label: Flatcar
       # packer/nutanix/flatcar.json names a local file, not a URL.
       requiresImageURL: true
-  # Suggestions in the version picker; users may type any v1.X.Y. Match these
-  # to the Kubernetes versions supported by your NKP release.
+  # Versions in the form's dropdown, newest first. Users can still build any
+  # other v1.X.Y by choosing "Other version…" and typing it. Match these to the
+  # Kubernetes versions supported by your NKP release.
   kubernetesVersions:
     - v1.36.2
-    - v1.36.1
     - v1.35.2
-    - v1.35.0
-    - v1.34.2
 
 # -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
 # fips=1, FIPS crypto policy, dracut fips module) before provisioning and
