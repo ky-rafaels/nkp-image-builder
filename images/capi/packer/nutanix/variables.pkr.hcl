@@ -361,6 +361,8 @@ variable "containerd_image_pull_progress_timeout" {
 # containerd/runc are pinned to what NKP itself ships (containerd
 # 2.3.1-d2iq.1 bundles, which are upstream v2.3.1 + runc v1.4.2) so non-FIPS
 # images match NKP's own node images. Keep in step with fips_containerd_version.
+# NKP's Kubernetes 1.35 images use containerd 2.1.6-d2iq.1 (upstream v2.1.6 +
+# runc v1.3.4) instead; the webui passes that pair for 1.35 builds.
 variable "containerd_version" {
   type        = string
   description = "containerd version to install."

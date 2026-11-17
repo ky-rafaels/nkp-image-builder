@@ -32,5 +32,6 @@ data:
       "fips" (.Values.fips | default dict)
       "stig" (.Values.stig | default dict)
       "gpu" (.Values.gpu | default dict)
+      "containerd" (.Values.containerd | default dict)
     }}
     {{- $cfg | toPrettyJson | nindent 4 }}

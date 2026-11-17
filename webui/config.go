@@ -30,7 +30,39 @@ type Config struct {
 	FIPS     FIPSConfig    `json:"fips"`
 	STIG     STIGConfig    `json:"stig"`
 	GPU      GPUConfig     `json:"gpu"`
+	// Containerd pins containerd and runc per Kubernetes minor ("v1.35").
+	// Entries replace the built-in pair for the same minor.
+	Containerd map[string]ContainerdRelease `json:"containerd"`
 }
+
+// ContainerdRelease is the containerd and runc a build installs for one
+// Kubernetes minor. NKP's containerd-<version>-d2iq.1 bundles are upstream
+// containerd plus upstream runc, so non-FIPS builds install those upstream
+// releases and FIPS builds the BoringCrypto EL9 bundle of the same version.
+type ContainerdRelease struct {
+	Containerd string `json:"containerd"`
+	Runc       string `json:"runc"`
+	// FIPSSHA256 is the sha256 of
+	// containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz. FIPS builds
+	// only use this pair when it is set.
+	FIPSSHA256 string `json:"fipsSha256"`
+}
+
+// defaultContainerdReleases match NKP's own node images: containerd
+// 2.1.6-d2iq.1 for Kubernetes 1.35 and 2.3.1-d2iq.1 for 1.36. Minors not
+// listed get the Packer defaults (packer/config/containerd.json).
+// containerd 2.3 writes config version 4 and refuses a drop-in newer than
+// config.toml, which 2.1 does not.
+var defaultContainerdReleases = map[string]ContainerdRelease{
+	"v1.35": {Containerd: "2.1.6", Runc: "1.3.4", FIPSSHA256: "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6"},
+	"v1.36": {Containerd: "2.3.1", Runc: "1.4.2", FIPSSHA256: "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020"},
+}
+
+var (
+	reK8sMinor = regexp.MustCompile(`^v1\.[0-9]+$`)
+	reSemver   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	reSHA256   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 // GPUConfig controls the "Attach a GPU" build option: a GPU or vGPU profile
 // from the build cluster is attached to the build VM, and the NVIDIA driver
@@ -342,6 +374,17 @@ func loadConfig(path string) (*Config, error) {
 	if len(cfg.Catalog.OperatingSystems) == 0 {
 		return nil, fmt.Errorf("catalog.operatingSystems must not be empty")
 	}
+	for minor, rel := range cfg.Containerd {
+		if !reK8sMinor.MatchString(minor) {
+			return nil, fmt.Errorf("containerd: key %q must be a Kubernetes minor like v1.35", minor)
+		}
+		if !reSemver.MatchString(rel.Containerd) || !reSemver.MatchString(rel.Runc) {
+			return nil, fmt.Errorf("containerd.%s: containerd and runc must be versions like 2.1.6 and 1.3.4", minor)
+		}
+		if rel.FIPSSHA256 != "" && !reSHA256.MatchString(rel.FIPSSHA256) {
+			return nil, fmt.Errorf("containerd.%s.fipsSha256 must be a lowercase hex sha256", minor)
+		}
+	}
 	if b := cfg.GPU.NVIDIA.DriverBranch; b != "" && !reDriverBranch.MatchString(b) {
 		return nil, fmt.Errorf("gpu.nvidia.driverBranch must be a driver branch number like 580, not %q", b)
 	}
@@ -396,6 +439,14 @@ func (c *Config) applyDefaults() {
 		o := &c.Catalog.OperatingSystems[i]
 		if o.ImageNameOS == "" {
 			o.ImageNameOS = reYearMonthOS.ReplaceAllString(o.ID, "$1$2.$3")
+		}
+	}
+	if c.Containerd == nil {
+		c.Containerd = map[string]ContainerdRelease{}
+	}
+	for minor, rel := range defaultContainerdReleases {
+		if _, ok := c.Containerd[minor]; !ok {
+			c.Containerd[minor] = rel
 		}
 	}
 	d := &c.Defaults

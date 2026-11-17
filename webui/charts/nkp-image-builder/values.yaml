@@ -144,6 +144,21 @@ catalog:
     - v1.36.2
     - v1.35.2
 
+# -- containerd and runc for each Kubernetes minor, matching NKP's own node
+# images. Built in:
+#   v1.35: containerd 2.1.6 + runc 1.3.4 (NKP's containerd 2.1.6-d2iq.1)
+#   v1.36: containerd 2.3.1 + runc 1.4.2 (NKP's containerd 2.3.1-d2iq.1)
+# Entries here replace the built-in pair for the same minor; other minors get
+# the Packer defaults (containerd 2.3.1, runc 1.4.2). fipsSha256 is the sha256
+# of containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz; FIPS builds
+# only use the pair when it is set. A build's extra var containerd_version
+# overrides the pair.
+containerd: {}
+#  v1.37:
+#    containerd: 2.3.2
+#    runc: 1.4.3
+#    fipsSha256: "<64 hex chars>"
+
 # -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
 # fips=1, FIPS crypto policy, dracut fips module) before provisioning and
 # installs Kubernetes, containerd and runc built with BoringCrypto (a FIPS 140
@@ -177,9 +192,11 @@ fips:
   # usr/local/sbin, etc/systemd/system). If you change the version or URL,
   # set containerdSHA256 to match.
   # Default URL: https://packages.d2iq.com/dkp/containerd/containerd-<version>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz
-  containerdVersion: ""   # default 2.3.1
+  # Setting containerdVersion or containerdURL replaces the per-minor bundle
+  # from `containerd` below for every FIPS build.
+  containerdVersion: ""   # default: the Kubernetes minor's containerd (below), else 2.3.1
   containerdURL: ""
-  containerdSHA256: ""    # default: sha256 of the 2.3.1 bundle
+  containerdSHA256: ""    # default: sha256 of that bundle
 
 # -- DISA STIG hardening (implies FIPS). The build applies the SCAP Security
 # Guide "stig" profile (DISA STIG for RHEL 9) with oscap, tailored with the

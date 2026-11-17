@@ -447,6 +447,15 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	if _, pinned := r.ExtraVars["crictl_version"]; !pinned {
 		set("crictl_version", "1."+minor+".0")
 	}
+	// containerd and runc follow the Kubernetes minor, as in NKP's own node
+	// images. Pinning containerd_version via extra vars opts out of both.
+	rel, paired := cfg.Containerd["v1."+minor]
+	if _, pinned := r.ExtraVars["containerd_version"]; paired && !pinned {
+		set("containerd_version", rel.Containerd)
+		if _, pinned := r.ExtraVars["runc_version"]; !pinned {
+			set("runc_version", rel.Runc)
+		}
+	}
 	set("image_name", r.ImageName)
 	set("nutanix_cluster_name", r.ClusterName)
 	set("nutanix_subnet_name", r.SubnetName)
@@ -467,6 +476,12 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	if r.FIPS {
 		for k, v := range cfg.FIPS.packerVars(r.KubernetesVersion) {
 			vars[k] = v
+		}
+		// The BoringCrypto bundle for the minor's containerd, unless the chart
+		// names its own (fips.containerdVersion / fips.containerdURL).
+		if paired && rel.FIPSSHA256 != "" && cfg.FIPS.ContainerdVersion == "" && cfg.FIPS.ContainerdURL == "" {
+			vars["fips_containerd_version"] = rel.Containerd
+			vars["fips_containerd_sha256"] = rel.FIPSSHA256
 		}
 		vars["fips_enabled"] = "true"
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -580,6 +581,74 @@ func TestStaticAssetsServed(t *testing.T) {
 		s.routes().ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code != 200 {
 			t.Errorf("%s: %d", p, rec.Code)
+		}
+	}
+}
+
+func TestContainerdPairing(t *testing.T) {
+	cfg := testConfig()
+	vars := func(r BuildRequest) map[string]string {
+		t.Helper()
+		if r.OS == "" {
+			r.OS = "rockylinux-9"
+		}
+		if err := r.normalize(cfg); err != nil {
+			t.Fatal(err)
+		}
+		return r.packerVars(cfg)
+	}
+	const fips216 = "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6"
+	for name, tc := range map[string]struct {
+		req                 BuildRequest
+		containerd, runc    string // "" = not passed, so the Packer default
+		fipsVersion, fipsSH string
+	}{
+		"1.35":             {BuildRequest{KubernetesVersion: "v1.35.2"}, "2.1.6", "1.3.4", "", ""},
+		"1.36":             {BuildRequest{KubernetesVersion: "v1.36.2"}, "2.3.1", "1.4.2", "", ""},
+		"unpaired minor":   {BuildRequest{KubernetesVersion: "v1.34.2"}, "", "", "", ""},
+		"pinned":           {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"containerd_version": "2.3.1"}}, "2.3.1", "", "", ""},
+		"pinned runc only": {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"runc_version": "1.3.5"}}, "2.1.6", "1.3.5", "", ""},
+		"fips 1.35":        {BuildRequest{KubernetesVersion: "v1.35.2", FIPS: true}, "2.1.6", "1.3.4", "2.1.6", fips216},
+	} {
+		v := vars(tc.req)
+		for k, want := range map[string]string{
+			"containerd_version": tc.containerd, "runc_version": tc.runc,
+			"fips_containerd_version": tc.fipsVersion, "fips_containerd_sha256": tc.fipsSH,
+		} {
+			if got, set := v[k]; got != want || set != (want != "") {
+				t.Errorf("%s: %s = %q (set %v), want %q", name, k, got, set, want)
+			}
+		}
+	}
+
+	// The chart's own FIPS bundle wins over the pair.
+	cfg.FIPS.ContainerdVersion = "2.3.1"
+	v := vars(BuildRequest{KubernetesVersion: "v1.35.2", FIPS: true})
+	if _, set := v["fips_containerd_sha256"]; v["fips_containerd_version"] != "2.3.1" || set {
+		t.Errorf("chart FIPS containerd: %v", v)
+	}
+
+	// Configured pairs replace the built-in one for their minor only.
+	own := &Config{Containerd: map[string]ContainerdRelease{"v1.35": {Containerd: "2.1.7", Runc: "1.3.5"}}}
+	own.applyDefaults()
+	if own.Containerd["v1.35"].Containerd != "2.1.7" || own.Containerd["v1.36"].Containerd != "2.3.1" {
+		t.Errorf("merged pairs = %+v", own.Containerd)
+	}
+}
+
+func TestLoadConfigValidatesContainerd(t *testing.T) {
+	for name, body := range map[string]string{
+		"key":    `{"containerd":{"1.35":{"containerd":"2.1.6","runc":"1.3.4"}}}`,
+		"runc":   `{"containerd":{"v1.35":{"containerd":"2.1.6"}}}`,
+		"sha256": `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","fipsSha256":"abc"}}}`,
+	} {
+		path := t.TempDir() + "/config.json"
+		cfg := `{"builder":{"image":"x"},"nutanix":{"credentialsSecret":"s"},"catalog":{"operatingSystems":[{"id":"ubuntu-2204"}]},` + body[1:]
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "containerd") {
+			t.Errorf("%s: want a containerd error, got %v", name, err)
 		}
 	}
 }
