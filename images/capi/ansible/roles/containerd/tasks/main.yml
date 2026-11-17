@@ -26,9 +26,15 @@
 
 # TODO(vincepri): Use deb/rpm packages once available.
 # See https://github.com/containerd/containerd/issues/1508 for context.
-- name: Import FIPS containerd tasks
-  ansible.builtin.import_tasks: fips.yml
-  when: fips_enabled | bool
+- name: Pick the containerd bundle to install, if any
+  ansible.builtin.set_fact:
+    containerd_from_bundle: "{{ fips_enabled | bool or containerd_bundle_url | length > 0 }}"
+    containerd_bundle_install_url: "{{ containerd_fips_url if fips_enabled | bool else containerd_bundle_url }}"
+    containerd_bundle_install_sha256: "{{ containerd_fips_sha256 if fips_enabled | bool else containerd_bundle_sha256 }}"
+
+- name: Import containerd bundle tasks
+  ansible.builtin.import_tasks: bundle.yml
+  when: containerd_from_bundle | bool
 
 - name: Download containerd
   ansible.builtin.get_url:
@@ -40,7 +46,7 @@
   until: containerd_download is not failed
   retries: 5
   delay: 3
-  when: not (fips_enabled | bool)
+  when: not (containerd_from_bundle | bool)
 
 - name: Download containerd.service from URL
   ansible.builtin.get_url:
@@ -51,7 +57,7 @@
   until: containerd_service_download is not failed
   retries: 5
   delay: 3
-  when: not (fips_enabled | bool) and (containerd_service_url | default("") | length > 0)
+  when: not (containerd_from_bundle | bool) and (containerd_service_url | default("") | length > 0)
 
 - name: Fail if containerd_version overrides the bundled service template without a matching containerd_service_url
   ansible.builtin.fail:
@@ -67,7 +73,7 @@
       bumping containerd_service_template_versions, to avoid installing a
       service unit that does not match the selected containerd binary.
   when:
-    - not (fips_enabled | bool)
+    - not (containerd_from_bundle | bool)
     - containerd_service_url | default("") | length == 0
     - containerd_version not in (containerd_service_template_versions | default([]))
 
@@ -76,7 +82,7 @@
     src: etc/systemd/system/containerd.service
     dest: /tmp/containerd.service
     mode: "0600"
-  when: not (fips_enabled | bool) and containerd_service_url | default("") | length == 0
+  when: not (containerd_from_bundle | bool) and containerd_service_url | default("") | length == 0
 
 - name: Download runc
   ansible.builtin.get_url:
@@ -88,7 +94,7 @@
   until: containerd_runc_download is not failed
   retries: 5
   delay: 3
-  when: not (fips_enabled | bool)
+  when: not (containerd_from_bundle | bool)
 
 - name: Download containerd-wasm-shims
   vars:
@@ -121,7 +127,7 @@
     dest: "{{ containerd_prefix | default('/usr/local') }}"
     extra_opts:
       - --no-overwrite-dir
-  when: not (fips_enabled | bool) and ansible_facts['os_family'] != "Flatcar"
+  when: not (containerd_from_bundle | bool) and ansible_facts['os_family'] != "Flatcar"
 
 - name: Copy containerd.service to /etc/systemd/system
   ansible.builtin.copy:
@@ -129,7 +135,7 @@
     src: /tmp/containerd.service
     dest: /etc/systemd/system/containerd.service
     mode: "0644"
-  when: not (fips_enabled | bool)
+  when: not (containerd_from_bundle | bool)
 
 - name: Copy runc to /usr/local/sbin
   ansible.builtin.copy:
@@ -137,7 +143,7 @@
     src: /tmp/runc
     dest: /usr/local/sbin/runc
     mode: "0755"
-  when: not (fips_enabled | bool) and (ansible_facts['os_family'] != "Flatcar")
+  when: not (containerd_from_bundle | bool) and (ansible_facts['os_family'] != "Flatcar")
 
 # Install containerd Wasm shims specified in a comma-separated string. Known runtimes are 'lunatic', 'slight', 'spin', and 'wws'.
 - name: Unpack containerd-wasm-shims

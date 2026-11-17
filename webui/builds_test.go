@@ -587,6 +587,7 @@ func TestStaticAssetsServed(t *testing.T) {
 
 func TestContainerdPairing(t *testing.T) {
 	cfg := testConfig()
+	cfg.Catalog.OperatingSystems = append(cfg.Catalog.OperatingSystems, OSOption{ID: "ubuntu-2604"})
 	vars := func(r BuildRequest) map[string]string {
 		t.Helper()
 		if r.OS == "" {
@@ -597,23 +598,37 @@ func TestContainerdPairing(t *testing.T) {
 		}
 		return r.packerVars(cfg)
 	}
-	const fips216 = "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6"
+	const (
+		fips216  = "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6"
+		rocky216 = "https://packages.d2iq.com/dkp/containerd/containerd-2.1.6-d2iq.1-rocky-9.8-x86_64.tar.gz"
+		rockySum = "540f5fc696649481e3634c8fbd7b3016560118530afede34f720576e90e99114"
+		ubuntu22 = "https://packages.d2iq.com/dkp/containerd/containerd-2.1.6-d2iq.1-ubuntu-22.04-x86_64.tar.gz"
+		ubuSum   = "89e18f2f188f7ae8a4432f3cd5ea76aec2689fd02e60f93338eee14a3a164872"
+		rhel231  = "https://packages.d2iq.com/dkp/containerd/containerd-2.3.1-d2iq.1-rhel-9.8-x86_64.tar.gz"
+		rhelSum  = "03ff4589cee96342fba90fc1fae49c5d87ba3d5e7ea231ca32844573386e3cf6"
+	)
 	for name, tc := range map[string]struct {
 		req                 BuildRequest
 		containerd, runc    string // "" = not passed, so the Packer default
 		fipsVersion, fipsSH string
+		bundle, bundleSHA   string
 	}{
-		"1.35":             {BuildRequest{KubernetesVersion: "v1.35.2"}, "2.1.6", "1.3.4", "", ""},
-		"1.36":             {BuildRequest{KubernetesVersion: "v1.36.2"}, "2.3.1", "1.4.2", "", ""},
-		"unpaired minor":   {BuildRequest{KubernetesVersion: "v1.34.2"}, "", "", "", ""},
-		"pinned":           {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"containerd_version": "2.3.1"}}, "2.3.1", "", "", ""},
-		"pinned runc only": {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"runc_version": "1.3.5"}}, "2.1.6", "1.3.5", "", ""},
-		"fips 1.35":        {BuildRequest{KubernetesVersion: "v1.35.2", FIPS: true}, "2.1.6", "1.3.4", "2.1.6", fips216},
+		"1.35 rocky":       {BuildRequest{KubernetesVersion: "v1.35.2"}, "2.1.6", "1.3.4", "", "", rocky216, rockySum},
+		"1.35 ubuntu":      {BuildRequest{OS: "ubuntu-2204", KubernetesVersion: "v1.35.2"}, "2.1.6", "1.3.4", "", "", ubuntu22, ubuSum},
+		"1.35 no bundle":   {BuildRequest{OS: "ubuntu-2604", KubernetesVersion: "v1.35.2"}, "2.1.6", "1.3.4", "", "", "", ""},
+		"1.36 rhel":        {BuildRequest{OS: "rhel-9", SourceImage: "rhel-9.6", KubernetesVersion: "v1.36.2"}, "2.3.1", "1.4.2", "", "", rhel231, rhelSum},
+		"1.36 no bundle":   {BuildRequest{OS: "ubuntu-2604", KubernetesVersion: "v1.36.2"}, "2.3.1", "1.4.2", "", "", "", ""},
+		"unpaired minor":   {BuildRequest{KubernetesVersion: "v1.34.2"}, "", "", "", "", "", ""},
+		"pinned":           {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"containerd_version": "2.3.1"}}, "2.3.1", "", "", "", "", ""},
+		"pinned runc only": {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"runc_version": "1.3.5"}}, "2.1.6", "1.3.5", "", "", rocky216, rockySum},
+		"own bundle":       {BuildRequest{KubernetesVersion: "v1.35.2", ExtraVars: map[string]string{"containerd_bundle_url": "https://mirror/c.tar.gz"}}, "2.1.6", "1.3.4", "", "", "https://mirror/c.tar.gz", ""},
+		"fips 1.35":        {BuildRequest{KubernetesVersion: "v1.35.2", FIPS: true}, "2.1.6", "1.3.4", "2.1.6", fips216, "", ""},
 	} {
 		v := vars(tc.req)
 		for k, want := range map[string]string{
 			"containerd_version": tc.containerd, "runc_version": tc.runc,
 			"fips_containerd_version": tc.fipsVersion, "fips_containerd_sha256": tc.fipsSH,
+			"containerd_bundle_url": tc.bundle, "containerd_bundle_sha256": tc.bundleSHA,
 		} {
 			if got, set := v[k]; got != want || set != (want != "") {
 				t.Errorf("%s: %s = %q (set %v), want %q", name, k, got, set, want)
@@ -634,13 +649,19 @@ func TestContainerdPairing(t *testing.T) {
 	if own.Containerd["v1.35"].Containerd != "2.1.7" || own.Containerd["v1.36"].Containerd != "2.3.1" {
 		t.Errorf("merged pairs = %+v", own.Containerd)
 	}
+	if got := (ContainerdBundle{URL: "https://mirror/x.tar.gz"}).BundleURL("2.1.6"); got != "https://mirror/x.tar.gz" {
+		t.Errorf("mirror bundle URL = %q", got)
+	}
 }
 
 func TestLoadConfigValidatesContainerd(t *testing.T) {
 	for name, body := range map[string]string{
-		"key":    `{"containerd":{"1.35":{"containerd":"2.1.6","runc":"1.3.4"}}}`,
-		"runc":   `{"containerd":{"v1.35":{"containerd":"2.1.6"}}}`,
-		"sha256": `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","fipsSha256":"abc"}}}`,
+		"key":           `{"containerd":{"1.35":{"containerd":"2.1.6","runc":"1.3.4"}}}`,
+		"runc":          `{"containerd":{"v1.35":{"containerd":"2.1.6"}}}`,
+		"sha256":        `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","fipsSha256":"abc"}}}`,
+		"bundle distro": `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","bundles":{"rockylinux-9":{"distro":"rocky","sha256":"` + strings.Repeat("a", 64) + `"}}}}}`,
+		"bundle url":    `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","bundles":{"rockylinux-9":{"url":"file:///x","sha256":"` + strings.Repeat("a", 64) + `"}}}}}`,
+		"bundle sha":    `{"containerd":{"v1.35":{"containerd":"2.1.6","runc":"1.3.4","bundles":{"rockylinux-9":{"distro":"rocky-9.8"}}}}}`,
 	} {
 		path := t.TempDir() + "/config.json"
 		cfg := `{"builder":{"image":"x"},"nutanix":{"credentialsSecret":"s"},"catalog":{"operatingSystems":[{"id":"ubuntu-2204"}]},` + body[1:]

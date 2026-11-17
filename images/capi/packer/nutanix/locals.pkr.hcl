@@ -233,6 +233,8 @@ locals {
     "fips_enabled=${local.fips_enabled}",
     "containerd_fips_url=${local.containerd_fips_url}",
     "containerd_fips_sha256=${local.fips_enabled ? var.fips_containerd_sha256 : ""}",
+    "containerd_bundle_url=${local.fips_enabled ? "" : var.containerd_bundle_url}",
+    "containerd_bundle_sha256=${local.fips_enabled ? "" : var.containerd_bundle_sha256}",
     "kubernetes_build_metadata=${local.kubernetes_build_metadata}",
     "kubernetes_coredns_image_repository=${local.fips_enabled ? var.fips_coredns_image_repository : ""}",
     "kubernetes_etcd_image_tag=${local.fips_enabled ? var.fips_etcd_image_tag : ""}",

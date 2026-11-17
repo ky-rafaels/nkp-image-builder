@@ -448,12 +448,18 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 		set("crictl_version", "1."+minor+".0")
 	}
 	// containerd and runc follow the Kubernetes minor, as in NKP's own node
-	// images. Pinning containerd_version via extra vars opts out of both.
+	// images, and come from NKP's bundle for the OS when there is one.
+	// Pinning containerd_version via extra vars opts out of all of it.
 	rel, paired := cfg.Containerd["v1."+minor]
 	if _, pinned := r.ExtraVars["containerd_version"]; paired && !pinned {
 		set("containerd_version", rel.Containerd)
 		if _, pinned := r.ExtraVars["runc_version"]; !pinned {
 			set("runc_version", rel.Runc)
+		}
+		_, ownBundle := r.ExtraVars["containerd_bundle_url"]
+		if b, ok := rel.Bundles[r.OS]; ok && !r.FIPS && !ownBundle {
+			set("containerd_bundle_url", b.BundleURL(rel.Containerd))
+			set("containerd_bundle_sha256", b.SHA256)
 		}
 	}
 	set("image_name", r.ImageName)

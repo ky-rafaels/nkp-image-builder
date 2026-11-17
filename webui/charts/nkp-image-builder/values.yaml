@@ -146,18 +146,27 @@ catalog:
 
 # -- containerd and runc for each Kubernetes minor, matching NKP's own node
 # images. Built in:
-#   v1.35: containerd 2.1.6 + runc 1.3.4 (NKP's containerd 2.1.6-d2iq.1)
-#   v1.36: containerd 2.3.1 + runc 1.4.2 (NKP's containerd 2.3.1-d2iq.1)
+#   v1.35: NKP's containerd 2.1.6-d2iq.1 bundle (containerd 2.1.6 + runc 1.3.4)
+#          on rockylinux-9 (rocky-9.8), rhel-9 (rhel-9.6), ubuntu-2204 and
+#          ubuntu-2404; upstream 2.1.6 + runc 1.3.4 on other OSes
+#   v1.36: NKP's containerd 2.3.1-d2iq.1 bundle (containerd 2.3.1 + runc 1.4.2)
+#          on rockylinux-9 (rocky-9.8), rhel-9 (rhel-9.8), ubuntu-2204 and
+#          ubuntu-2404; upstream 2.3.1 + runc 1.4.2 on other OSes
 # Entries here replace the built-in pair for the same minor; other minors get
-# the Packer defaults (containerd 2.3.1, runc 1.4.2). fipsSha256 is the sha256
-# of containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz; FIPS builds
-# only use the pair when it is set. A build's extra var containerd_version
+# the Packer defaults (containerd 2.3.1, runc 1.4.2). bundles maps an OS ID
+# to NKP's non-FIPS bundle, containerd-<containerd>-d2iq.1-<distro>-x86_64.tar.gz
+# on packages.d2iq.com (or url, e.g. a mirror), with its sha256: D2iQ
+# publishes no checksums. fipsSha256 is the sha256 of
+# containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz; FIPS builds only
+# use the pair when it is set. A build's extra var containerd_version
 # overrides the pair.
 containerd: {}
 #  v1.37:
 #    containerd: 2.3.2
 #    runc: 1.4.3
 #    fipsSha256: "<64 hex chars>"
+#    bundles:
+#      rockylinux-9: {distro: rocky-9.8, sha256: "<64 hex chars>"}
 
 # -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
 # fips=1, FIPS crypto policy, dracut fips module) before provisioning and

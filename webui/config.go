@@ -36,9 +36,9 @@ type Config struct {
 }
 
 // ContainerdRelease is the containerd and runc a build installs for one
-// Kubernetes minor. NKP's containerd-<version>-d2iq.1 bundles are upstream
-// containerd plus upstream runc, so non-FIPS builds install those upstream
-// releases and FIPS builds the BoringCrypto EL9 bundle of the same version.
+// Kubernetes minor. NKP's containerd-<version>-d2iq.1 bundles are built from
+// the upstream containerd and runc tags, so an OS without a bundle gets those
+// upstream releases; FIPS builds get the BoringCrypto EL9 bundle.
 type ContainerdRelease struct {
 	Containerd string `json:"containerd"`
 	Runc       string `json:"runc"`
@@ -46,22 +46,61 @@ type ContainerdRelease struct {
 	// containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz. FIPS builds
 	// only use this pair when it is set.
 	FIPSSHA256 string `json:"fipsSha256"`
+	// Bundles are NKP's own non-FIPS builds of this containerd, by operating
+	// system ID. A build for a listed OS installs its bundle, so containerd
+	// reports NKP's version (e.g. 2.1.6-d2iq.1).
+	Bundles map[string]ContainerdBundle `json:"bundles"`
+}
+
+// ContainerdBundle is one of NKP's containerd + runc bundles. packages.d2iq.com
+// publishes no checksums, so the sha256 is pinned here.
+type ContainerdBundle struct {
+	// Distro names the bundle: containerd-<containerd>-d2iq.1-<distro>-x86_64.tar.gz.
+	Distro string `json:"distro"`
+	// URL replaces the packages.d2iq.com URL, e.g. with a mirror.
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+}
+
+const d2iqContainerdBundleURL = "https://packages.d2iq.com/dkp/containerd/containerd-%s-d2iq.1-%s-x86_64.tar.gz"
+
+// BundleURL is where the bundle for containerd version v is downloaded from.
+func (b ContainerdBundle) BundleURL(v string) string {
+	if b.URL != "" {
+		return b.URL
+	}
+	return fmt.Sprintf(d2iqContainerdBundleURL, v, b.Distro)
 }
 
 // defaultContainerdReleases match NKP's own node images: containerd
 // 2.1.6-d2iq.1 for Kubernetes 1.35 and 2.3.1-d2iq.1 for 1.36. Minors not
 // listed get the Packer defaults (packer/config/containerd.json).
 // containerd 2.3 writes config version 4 and refuses a drop-in newer than
-// config.toml, which 2.1 does not.
+// config.toml, which 2.1 does not. Both install NKP's bundles where one
+// exists for the OS (no ubuntu-26.04 builds; no rhel-9.8 build of 2.1.6, and
+// the EL9 bundles only need glibc 2.34, so any RHEL 9 minor runs them).
 var defaultContainerdReleases = map[string]ContainerdRelease{
-	"v1.35": {Containerd: "2.1.6", Runc: "1.3.4", FIPSSHA256: "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6"},
-	"v1.36": {Containerd: "2.3.1", Runc: "1.4.2", FIPSSHA256: "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020"},
+	"v1.35": {Containerd: "2.1.6", Runc: "1.3.4", FIPSSHA256: "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6",
+		Bundles: map[string]ContainerdBundle{
+			"rockylinux-9": {Distro: "rocky-9.8", SHA256: "540f5fc696649481e3634c8fbd7b3016560118530afede34f720576e90e99114"},
+			"rhel-9":       {Distro: "rhel-9.6", SHA256: "d7f1c2e061bf2e619e41bba281cc26545f906d6bc82b49f94d3a09e4954d5496"},
+			"ubuntu-2204":  {Distro: "ubuntu-22.04", SHA256: "89e18f2f188f7ae8a4432f3cd5ea76aec2689fd02e60f93338eee14a3a164872"},
+			"ubuntu-2404":  {Distro: "ubuntu-24.04", SHA256: "1cfa30026773df76220c605485aac5a2c4f88660ffe723c4bd3a658607b846bd"},
+		}},
+	"v1.36": {Containerd: "2.3.1", Runc: "1.4.2", FIPSSHA256: "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020",
+		Bundles: map[string]ContainerdBundle{
+			"rockylinux-9": {Distro: "rocky-9.8", SHA256: "212f233a3214f1031ad88dc05f771992d89fb1ea3135b6a8529458cb631ea1d5"},
+			"rhel-9":       {Distro: "rhel-9.8", SHA256: "03ff4589cee96342fba90fc1fae49c5d87ba3d5e7ea231ca32844573386e3cf6"},
+			"ubuntu-2204":  {Distro: "ubuntu-22.04", SHA256: "590bc3c34e6ee2596c9494104f4a86d0f69d3d00e8f8241a9213c9b17d007d69"},
+			"ubuntu-2404":  {Distro: "ubuntu-24.04", SHA256: "405a67a5984a84945194152b24f69064d378ddc5d7475477ede5d1c17cd7ed9c"},
+		}},
 }
 
 var (
 	reK8sMinor = regexp.MustCompile(`^v1\.[0-9]+$`)
 	reSemver   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	reSHA256   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	reDistro   = regexp.MustCompile(`^[a-z]+-[0-9]+(\.[0-9]+)*$`)
 )
 
 // GPUConfig controls the "Attach a GPU" build option: a GPU or vGPU profile
@@ -383,6 +422,17 @@ func loadConfig(path string) (*Config, error) {
 		}
 		if rel.FIPSSHA256 != "" && !reSHA256.MatchString(rel.FIPSSHA256) {
 			return nil, fmt.Errorf("containerd.%s.fipsSha256 must be a lowercase hex sha256", minor)
+		}
+		for osID, b := range rel.Bundles {
+			if b.URL == "" && !reDistro.MatchString(b.Distro) {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s: distro must look like rocky-9.8, or set url", minor, osID)
+			}
+			if u, err := url.Parse(b.URL); b.URL != "" && (err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "") {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s.url must be an http(s) URL", minor, osID)
+			}
+			if !reSHA256.MatchString(b.SHA256) {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s.sha256 must be a lowercase hex sha256", minor, osID)
+			}
 		}
 	}
 	if b := cfg.GPU.NVIDIA.DriverBranch; b != "" && !reDriverBranch.MatchString(b) {
