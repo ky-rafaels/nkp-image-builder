@@ -32,7 +32,36 @@ PACKER_VAR_FILES=gpu.json make build-nutanix-ubuntu-2404
 Ubuntu, RHEL 9 and Rocky Linux 9 only; the variables are in
 `packer/nutanix/variables.pkr.hcl` (`nutanix_gpu_name`, `gpu_nvidia_*`) and
 `defaults/main.yml`. This path doesn't use `gpu_vendor` or
-`node_custom_roles_pre`; the sections below describe that separate flow.
+`node_custom_roles_pre`; the sections after "Attached GPU" describe that
+separate flow.
+
+## NKP's NVIDIA GPU Operator needs `RUNTIME_CONFIG_SOURCE`
+
+The image has no NVIDIA container toolkit. The GPU Operator's toolkit pod
+installs it when the node joins, adds an `nvidia` runtime drop-in to
+`/etc/containerd/conf.d/99-nvidia.toml` and restarts containerd. Toolkit 1.19
+(GPU Operator 26.3, NKP 2.19) builds that drop-in from `containerd config
+dump`, which containerd 2.3 prints as config version 4. The image's
+`/etc/containerd/config.toml` is version 3, like NKP's own node images, and
+CAREN's containerd patches (e.g. metrics) only work with version 3. containerd
+won't start with a drop-in newer than its root config ("drop-in config version
+4 higher than root config version 3"). The node's containerd stays down and
+the GPU Operator pods stay in ContainerCreating with "connect: connection
+refused" on containerd.sock.
+
+Point the toolkit at the config file instead, in the NVIDIA GPU Operator
+app's configuration (Helm values) before GPU nodes join:
+
+```yaml
+toolkit:
+  env:
+    - name: RUNTIME_CONFIG_SOURCE
+      value: file=/etc/containerd/config.toml
+```
+
+The drop-in is then version 3. This also works on DISA STIG images: fapolicyd
+lets containerd and runc, which are trusted and run as root, run the toolkit
+from `/usr/local/nvidia/toolkit`, so no extra fapolicyd rule is needed.
 
 # Driver in `node_custom_roles_pre`
 
