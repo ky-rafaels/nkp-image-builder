@@ -177,11 +177,11 @@ containerd: {}
 # air-gapped store. Air-gapped builds boot from an image already in Prism
 # Central. See README.md "Air-gapped builds".
 airgap:
-  enabled: false
+  enabled: true
   persistence:
     # ReadWriteOnce is enough: build pods download what they need from the UI.
     size: 50Gi
-    storageClassName: ""     # "" = the cluster default
+    storageClassName: "nutanix-volume"     # "" = the cluster default
     existingClaim: ""
   # Build pods' emptyDir for the downloaded artifacts or harvested packages.
   buildVolumeSizeLimit: 40Gi
