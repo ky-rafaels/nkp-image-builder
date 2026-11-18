@@ -69,6 +69,14 @@ ENV PACKER_VAR_FILES=''
 ENV PACKER_VERSION="${PACKER_VERSION}"
 ENV IB_ALLOW_ANY_PACKER="${IB_ALLOW_ANY_PACKER}"
 ENV IB_VERSION="${PASSED_IB_VERSION}"
+# Ubuntu 24.04's OpenSSL switches to FIPS mode by itself when the kernel has
+# FIPS enabled (/proc/sys/crypto/fips_enabled, which a container shares with
+# the node it runs on), and this image has no FIPS provider. On a FIPS
+# Kubernetes node every OpenSSL client in the build pod then fails: ssh exits
+# with "PRNG is not seeded" and Ansible reports the build VM UNREACHABLE.
+# Keep the builder's own tools out of FIPS mode. (Its ssh only talks to
+# Packer's local proxy; FIPS images get their FIPS setup from the build.)
+ENV OPENSSL_FORCE_FIPS_MODE=0
 
 RUN make deps
 

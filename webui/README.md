@@ -103,6 +103,21 @@ sources through extra variables.
 Ubuntu FIPS isn't offered. It needs an Ubuntu Pro token for the FIPS kernel,
 and there is no FIPS-built Kubernetes `.deb` source to install from.
 
+**Running the UI on FIPS nodes.** The builder image is Ubuntu 24.04. Its
+OpenSSL switches to FIPS mode by itself when the node's kernel has FIPS
+enabled, and the image has no FIPS provider. Without an override, ssh in the
+build pod fails with `PRNG is not seeded`, so Ansible reports the build VM
+`UNREACHABLE`. The image sets `OPENSSL_FORCE_FIPS_MODE=0` to prevent this.
+Builder images built before that change need the variable added through
+`builder.extraEnv`:
+
+```yaml
+builder:
+  extraEnv:
+    - name: OPENSSL_FORCE_FIPS_MODE
+      value: "0"
+```
+
 ## GPU images
 
 Ticking **Attach a GPU** (offered for OSes with `gpuCapable: true`: Ubuntu,
