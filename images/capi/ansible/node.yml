@@ -94,6 +94,21 @@
     - name: Include sysprep role
       ansible.builtin.include_role:
         name: sysprep
+    # goss from the build pod (the builder image ships it), so the goss step
+    # after this playbook doesn't download it on the VM (goss_skip_install).
+    - name: Upload goss for the goss step
+      when: goss_local_binary | default('') | length > 0
+      block:
+        # No mode: the directory is often /tmp, which must stay 1777.
+        - name: Create goss's directory  # noqa: risky-file-permissions
+          ansible.builtin.file:
+            path: "{{ goss_download_path | dirname }}"
+            state: directory
+        - name: Upload goss
+          ansible.builtin.copy:
+            src: "{{ goss_local_binary }}"
+            dest: "{{ goss_download_path }}"
+            mode: "0755"
     - name: Include post-sysprep custom roles
       ansible.builtin.include_role:
         name: "{{ role }}"

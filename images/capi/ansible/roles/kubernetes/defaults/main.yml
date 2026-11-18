@@ -51,6 +51,13 @@ kubernetes_enable_automatic_resource_sizing: false
 # a FIPS build repo by the caller), and so does crictl (cri-tools) instead of
 # the upstream GitHub release.
 fips_enabled: false
+# crictl from the cri-tools package of the Kubernetes package repo instead of
+# the GitHub release: FIPS builds, and air-gapped and harvesting builds
+# (roles/airgap), which get every package from an OS package bundle.
+kubernetes_crictl_from_package: >-
+  {{ fips_enabled | bool
+     or (airgap_artifacts_dir | default('')) | length > 0
+     or (airgap_harvest_dir | default('')) | length > 0 }}
 # Build metadata of the Kubernetes release, e.g. "fips.0" for v1.36.1+fips.0.
 # kubeadm turns "+" into "_" for image tags (kube-apiserver:v1.36.1_fips.0).
 kubernetes_build_metadata: ""

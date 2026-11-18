@@ -26,9 +26,17 @@
 
 # TODO(vincepri): Use deb/rpm packages once available.
 # See https://github.com/containerd/containerd/issues/1508 for context.
+# Air-gapped builds (roles/airgap) take NKP's bundle from the artifacts
+# directory in the build pod instead of downloading it.
+- name: Pick the air-gapped containerd bundle
+  ansible.builtin.include_tasks: airgap-bundle.yml
+  when:
+    - (airgap_artifacts_dir | default('')) | length > 0
+    - containerd_bundle_file | length == 0
+
 - name: Pick the containerd bundle to install, if any
   ansible.builtin.set_fact:
-    containerd_from_bundle: "{{ fips_enabled | bool or containerd_bundle_url | length > 0 }}"
+    containerd_from_bundle: "{{ fips_enabled | bool or containerd_bundle_url | length > 0 or containerd_bundle_file | length > 0 }}"
     containerd_bundle_install_url: "{{ containerd_fips_url if fips_enabled | bool else containerd_bundle_url }}"
     containerd_bundle_install_sha256: "{{ containerd_fips_sha256 if fips_enabled | bool else containerd_bundle_sha256 }}"
 

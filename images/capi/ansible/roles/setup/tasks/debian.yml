@@ -81,6 +81,14 @@
   loop: "{{ extra_repos.split() }}"
   when: extra_repos != ""
 
+# disable_public_repos (always on for air-gapped builds) also disabled the
+# air-gapped repo that ansible/airgap-prepare.yml configured; put it back.
+- name: Install from the air-gapped OS package bundles
+  ansible.builtin.include_role:
+    name: airgap
+    tasks_from: repo-again
+  when: (airgap_artifacts_dir | default('')) | length > 0
+
 - name: Hold nullboot
   ansible.builtin.dpkg_selections:
     name: nullboot

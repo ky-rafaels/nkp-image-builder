@@ -23,7 +23,14 @@
 - name: Fail if no FIPS containerd bundle is configured
   ansible.builtin.fail:
     msg: fips_enabled is true but containerd_fips_url is empty.
-  when: fips_enabled | bool and containerd_fips_url | length == 0
+  when: fips_enabled | bool and containerd_fips_url | length == 0 and containerd_bundle_file | length == 0
+
+- name: Upload containerd bundle
+  ansible.builtin.copy:
+    src: "{{ containerd_bundle_file }}"
+    dest: /tmp/containerd-bundle.tar.gz
+    mode: "0600"
+  when: containerd_bundle_file | length > 0
 
 - name: Download containerd bundle
   ansible.builtin.get_url:
@@ -35,6 +42,7 @@
   until: containerd_bundle_download is not failed
   retries: 5
   delay: 3
+  when: containerd_bundle_file | length == 0
 
 - name: List containerd bundle
   ansible.builtin.command: tar -tzf /tmp/containerd-bundle.tar.gz
@@ -50,7 +58,7 @@
       # Nothing outside usr/local and etc/systemd, since the bundle is unpacked at /.
       - containerd_bundle_contents.stdout_lines | reject('match', '^(\\./)?(etc/|etc/systemd/.*|usr/|usr/local/.*)$') | list | length == 0
     fail_msg: >-
-      {{ containerd_bundle_install_url }} does not look like a containerd bundle: expected only
+      {{ containerd_bundle_file or containerd_bundle_install_url }} does not look like a containerd bundle: expected only
       usr/local/bin/containerd*, usr/local/sbin/runc and etc/systemd/system/containerd.service.
 
 - name: Unpack containerd bundle

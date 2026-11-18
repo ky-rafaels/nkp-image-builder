@@ -48,6 +48,8 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Proxies, extra packages | `http_proxy`, `https_proxy`, `no_proxy`, `extra_debs`, `extra_rpms` |
 | Extra variables | any other variable in `packer/nutanix/variables.pkr.hcl` except credentials, SSH, naming and custom ansible/post-processor hooks |
 | Credential override | per-build Secret: `NUTANIX_ENDPOINT/PORT/INSECURE/USERNAME/PASSWORD`, `RHSM_USER/PASS` |
+| Network: Online, save OS packages | `airgap_harvest_dir`, `airgap_harvest_upload_url` (the artifact store). See [Air-gapped builds](#air-gapped-builds). |
+| Network: Air-gapped | `airgap_artifacts_dir` (the artifacts the build pod downloaded) and `airgap_os_package_bundles` |
 
 The rendered var-file is shown in each build's detail view.
 
@@ -250,6 +252,111 @@ The image covers the operating system STIG. The DISA **Kubernetes** STIG
 (API server, kubelet configuration, and so on) applies to the cluster NKP
 creates, not to the node image.
 
+## Air-gapped builds
+
+With `airgap.enabled`, a build can run where the build pods reach nothing but
+Prism Central and the build VM's subnet. The VM boots from an image already
+in Prism Central and installs everything from the UI's **artifact store**. It
+gets every file over the SSH connection Packer already has, and downloads
+nothing.
+
+An air-gapped build needs three kinds of artifact in the store:
+
+| Artifact | Where it comes from |
+|---|---|
+| NKP's containerd bundle, `containerd-<version>-d2iq.1-<distro>-<version>-x86_64[_fips].tar.gz` | The NKP air-gapped bundle's `image-artifacts/` directory |
+| NKP's image bundle, `images/kubernetes-images-<version>-d2iq.1[-fips].tar`, which is loaded into containerd in place of pulling the kubeadm and pause images | The same `image-artifacts/images/` directory |
+| An OS package bundle, `<k8s>_<os>_<os version>_x86_64[_fips][_stig][_gpu].tar.gz`: every OS, Kubernetes, STIG and GPU package the build installs, including the OS upgrade | A **harvesting build** (below), or `nkp create package-bundle` |
+
+The NKP air-gapped bundle has no OS packages. NKP expects you to make them
+with `nkp create package-bundle` on a connected machine. That bundle only has
+NKP's own package list, which covers neither this builder's STIG and GPU
+packages nor the OS upgrade. So make OS package bundles with harvesting
+builds.
+
+### 1. Harvest the OS packages, on a connected site
+
+Run the same build you'll run air-gapped online, with **Network: Online, save
+OS packages**. Use the same OS, Kubernetes version, FIPS/STIG/GPU options and
+source image. It's an ordinary online build that also keeps every package it
+downloads. At the end it stores them in the artifact store as the OS package
+bundle for that combination, for example `1.36.2_rocky_9.8_x86_64_stig.tar.gz`,
+named after the base image's OS version. Download it from the artifact list.
+
+Use the **same source image**: download the cloud image once, use that file
+for the harvesting build, and upload it to the air-gapped Prism Central too. A
+bundle carries the packages that one base image needed. A newer image (Rocky's
+`latest` qcow2 changes) may need packages the bundle doesn't have.
+
+### 2. Fill the air-gapped store
+
+On the air-gapped site:
+
+1. Install the chart with `airgap.enabled: true`. The builder and UI images
+   come from your internal registry.
+2. Upload the base cloud image to Prism Central.
+3. Under **Air-gapped artifacts**, click **Upload NKP folder** and pick the NKP
+   air-gapped bundle's folder (for example `nkp-v2.19.1`). Only its
+   `image-artifacts` files are uploaded (about 1.1 GB per release, about 50 MB
+   of it per containerd bundle). **Upload files** takes single files instead,
+   such as only the containerd bundles for your OSes and
+   `kubernetes-images-*.tar`.
+4. Upload the OS package bundles you harvested.
+
+Each NKP release carries the containerd and images for its own Kubernetes
+version: 2.18.0 has containerd 2.1.6 and Kubernetes 1.35.2, and 2.19.1 has
+containerd 2.3.1 and 1.36.2. To build both, upload both releases'
+`image-artifacts`.
+
+### 3. Build
+
+Pick **Network: Air-gapped** and the Prism Central source image. The form
+checks the store has an OS package bundle, a containerd bundle and an image
+bundle for the build. The build pod downloads them from the UI, and the
+build's log starts with those downloads. Leave **OS package bundles** empty to
+use the one named for the build. It's picked by the base image's OS version
+and the build's options, falling back to the `nkp create package-bundle` name
+without `_stig`/`_gpu`.
+
+### What changes in an air-gapped build
+
+* **Repos.** Every package repo on the VM is disabled before the first package
+  is installed (including the FIPS and STIG steps' installs). The OS package
+  bundles are then the only repos. pkgs.k8s.io, the D2iQ FIPS repo, EPEL and
+  NVIDIA's repo aren't configured. Sysprep removes the bundles and restores
+  the original repo files, so the image matches an online build.
+* **Kubernetes.** kubelet, kubeadm, kubectl, kubernetes-cni and cri-tools
+  come from the bundle. In harvesting and air-gapped builds, crictl comes from
+  the cri-tools package rather than GitHub.
+* **containerd.** NKP's bundle for the OS. Rocky Linux uses a Rocky bundle of
+  any 9.x, or RHEL's (NKP has no Rocky FIPS bundles). Ubuntu needs its own
+  release's bundle.
+* **Images.** Loaded with `mindthegap import image-bundle`, then checked
+  against `kubeadm config images list` and the pause image.
+* **goss and mindthegap.** These come from the builder image and are uploaded
+  to the VM. Online builds also upload goss now rather than downloading it.
+
+### Limits
+
+* Ubuntu, RHEL and Rocky Linux only.
+* GPU on RHEL/Rocky only with a vGPU profile. NVIDIA's data center driver for
+  them comes from a modular repo that can't be bundled. Ubuntu can use either.
+  The vGPU guest driver must be in the store under its URL's file name.
+* Package signatures aren't checked, since a bundle mixes packages from
+  several signers. The store records each artifact's sha256, and build pods
+  check it after downloading.
+* **Extra packages** and extra variables that install software need their
+  packages in the harvested bundle, so set them on the harvesting build too.
+* Behind an nginx ingress, allow large uploads with
+  `nginx.ingress.kubernetes.io/proxy-body-size: "0"` and
+  `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Traefik
+  needs nothing.
+
+The same works without the UI. Put the artifacts in a directory and pass
+`airgap_artifacts_dir=<dir>` (and optionally `airgap_os_package_bundles`) in
+`PACKER_VAR_FILES`. For harvesting, pass `airgap_harvest_dir=<dir>`. See
+`images/capi/ansible/roles/airgap`.
+
 ## Prerequisites
 
 * A Kubernetes cluster to run the service, such as the NKP management cluster.
@@ -260,8 +367,9 @@ creates, not to the node image.
   * Prism Central on 9440.
   * **SSH (22) to the build VM's subnet.** Ansible connects to the VM directly
     from the pod.
-  * The internet, or your mirrors/proxy, for pkgs.k8s.io, cloud images, the
-    goss binary, and so on.
+  * The internet, or your mirrors/proxy, for pkgs.k8s.io, cloud images, OS
+    packages and so on. Air-gapped builds need none of this (see
+    [Air-gapped builds](#air-gapped-builds)).
 * A Prism Central user that can create and delete VMs and images on the target
   cluster.
 

@@ -26,6 +26,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 	apt-transport-https \
 	build-essential \
 	ca-certificates \
+	# createrepo-c: harvesting builds write the dnf metadata of the OS package
+	# bundles they make (dpkg-scanpackages, for apt, comes with build-essential).
+	createrepo-c \
 	curl \
 	git \
 	jq \
@@ -79,5 +82,25 @@ ENV IB_VERSION="${PASSED_IB_VERSION}"
 ENV OPENSSL_FORCE_FIPS_MODE=0
 
 RUN make deps
+
+# Tools the build uploads to the VM instead of downloading them there, so a
+# build needs no internet access from the VM (air-gapped builds need none at
+# all): goss for the goss step, and mindthegap to load NKP's image bundles
+# into containerd. linux/amd64 whatever this image's architecture, as that's
+# what the VM runs. goss's version must match goss_version.
+ARG GOSS_VERSION=0.3.23
+ARG GOSS_SHA256=9e9f24e25f86d6adf2e669a9ffbe8c3d7b9b439f5f877500dea02ba837e10e4d
+ARG MINDTHEGAP_VERSION=1.26.3
+ARG MINDTHEGAP_SHA256=824c9f997f461e71d4b4fb9e6bb37c7f7b1234a3a08c96de73360714bf9acf3a
+ENV IB_VM_TOOLS_DIR=/home/imagebuilder/vm-tools
+RUN mkdir -p "${IB_VM_TOOLS_DIR}" && cd "${IB_VM_TOOLS_DIR}" \
+	&& curl -fsSL -o "goss-${GOSS_VERSION}-linux-amd64" \
+		"https://github.com/goss-org/goss/releases/download/v${GOSS_VERSION}/goss-linux-amd64" \
+	&& echo "${GOSS_SHA256}  goss-${GOSS_VERSION}-linux-amd64" | sha256sum -c - \
+	&& curl -fsSL -o mindthegap.tar.gz \
+		"https://github.com/mesosphere/mindthegap/releases/download/v${MINDTHEGAP_VERSION}/mindthegap_v${MINDTHEGAP_VERSION}_linux_amd64.tar.gz" \
+	&& echo "${MINDTHEGAP_SHA256}  mindthegap.tar.gz" | sha256sum -c - \
+	&& tar -xzf mindthegap.tar.gz mindthegap && mv mindthegap mindthegap-linux-amd64 && rm mindthegap.tar.gz \
+	&& chmod 0755 "goss-${GOSS_VERSION}-linux-amd64" mindthegap-linux-amd64
 
 ENTRYPOINT [ "/usr/bin/make" ]

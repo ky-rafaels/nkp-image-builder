@@ -1,0 +1,183 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Harvesting build, at the start of sysprep (after every role that installs
+# packages, before the caches are cleared): turn the packages the build
+# downloaded into an OS package bundle on the controller. They are exactly
+# what an air-gapped build of the same base image and options installs,
+# including the OS upgrade, so that build can run from the bundle alone.
+---
+- name: Work out the air-gapped artifact names
+  ansible.builtin.include_tasks: facts.yml
+
+- name: Name the harvested bundle
+  ansible.builtin.set_fact:
+    airgap_harvest_bundle: "{{ airgap_harvest_dir }}/{{ airgap_os_bundle_name }}"
+
+- name: Find the packages this build downloaded
+  ansible.builtin.find:
+    paths: "{{ ['/var/cache/dnf'] if ansible_facts['os_family'] == 'RedHat' else ['/var/cache/apt/archives'] }}"
+    patterns: "{{ '*.rpm' if ansible_facts['os_family'] == 'RedHat' else '*.deb' }}"
+    recurse: true
+  register: airgap_harvested
+
+- name: Fail if the build downloaded no packages
+  ansible.builtin.fail:
+    msg: Harvesting found no downloaded packages in the package cache.
+  when: airgap_harvested.files | length == 0
+
+- name: List the downloaded packages
+  ansible.builtin.copy:
+    content: "{{ airgap_harvested.files | map(attribute='path') | join('\n') }}\n"
+    dest: /var/tmp/image-builder-harvest.list
+    mode: "0600"
+
+# One file for the transfer; the packages are already compressed. Flattened,
+# as the same package can sit in more than one repo's cache directory.
+- name: Archive the downloaded packages  # noqa: command-instead-of-module (archive can't flatten paths)
+  ansible.builtin.command: >-
+    tar -cf /var/tmp/image-builder-harvest.tar --transform=s|.*/|| -T /var/tmp/image-builder-harvest.list
+  changed_when: true
+
+# Fetched as the SSH user: with become, fetch reads the file into memory.
+- name: Let the SSH user read the package archive
+  ansible.builtin.file:
+    path: /var/tmp/image-builder-harvest.tar
+    mode: "0644"
+
+- name: Make a work directory on the controller
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: image-builder-harvest.
+  register: airgap_harvest_tmp
+  delegate_to: localhost
+  become: false
+
+- name: Fetch the package archive
+  ansible.builtin.fetch:
+    src: /var/tmp/image-builder-harvest.tar
+    dest: "{{ airgap_harvest_tmp.path }}/packages.tar"
+    flat: true
+  become: false
+
+- name: Remove the package archive from the VM
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/tmp/image-builder-harvest.tar
+    - /var/tmp/image-builder-harvest.list
+
+- name: Build the OS package bundle
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Create the repo directory
+      ansible.builtin.file:
+        path: "{{ airgap_harvest_tmp.path }}/repo"
+        state: directory
+        mode: "0755"
+
+    - name: Extract the packages
+      ansible.builtin.command:
+        argv: [tar, -xf, "{{ airgap_harvest_tmp.path }}/packages.tar", -C, "{{ airgap_harvest_tmp.path }}/repo"]
+      changed_when: true
+
+    # gzip metadata, which every dnf/yum reads.
+    - name: Write the dnf repo metadata
+      ansible.builtin.command:
+        argv: [createrepo_c, --general-compress-type=gz, --quiet, "{{ airgap_harvest_tmp.path }}/repo"]
+      changed_when: true
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Write the apt repo index
+      ansible.builtin.shell:
+        cmd: dpkg-scanpackages --multiversion . /dev/null > Packages && gzip -9k Packages
+        chdir: "{{ airgap_harvest_tmp.path }}/repo"
+      changed_when: true
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Describe the bundle
+      ansible.builtin.copy:
+        dest: "{{ airgap_harvest_tmp.path }}/repo/image-builder-bundle.json"
+        content: "{{ airgap_bundle_manifest | to_nice_json }}\n"
+        mode: "0644"
+      vars:
+        airgap_bundle_manifest:
+          name: "{{ airgap_os_bundle_name }}"
+          os: "{{ airgap_os_id }}"
+          osVersion: "{{ airgap_os_version }}"
+          kubernetesVersion: "{{ airgap_kubernetes_version }}"
+          fips: "{{ fips_enabled | default(false) | bool }}"
+          stig: "{{ stig_enabled | default(false) | bool }}"
+          gpu: "{{ gpu_enabled | default(false) | bool }}"
+          kernel: "{{ ansible_facts['kernel'] }}"
+          packages: "{{ airgap_harvested.files | length }}"
+          created: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+
+    - name: Create the bundle's directory
+      ansible.builtin.file:
+        path: "{{ airgap_harvest_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write the OS package bundle
+      ansible.builtin.command:
+        argv: [tar, -czf, "{{ airgap_harvest_bundle }}", -C, "{{ airgap_harvest_tmp.path }}/repo", .]
+      changed_when: true
+
+    - name: Checksum the OS package bundle
+      ansible.builtin.stat:
+        path: "{{ airgap_harvest_bundle }}"
+        checksum_algorithm: sha256
+      register: airgap_harvest_stat
+
+    - name: Report the OS package bundle
+      ansible.builtin.debug:
+        msg: >-
+          Harvested {{ airgap_harvested.files | length }} packages into {{ airgap_harvest_bundle }}
+          ({{ (airgap_harvest_stat.stat.size / 1048576) | round(1) }} MiB,
+          sha256 {{ airgap_harvest_stat.stat.checksum }}). Use it for air-gapped builds of
+          {{ ansible_facts['distribution'] }} {{ airgap_os_version }} from the same base image.
+
+    # From a file, so the token is in neither the process list nor the log.
+    - name: Write the upload's authorization header
+      ansible.builtin.copy:
+        dest: "{{ airgap_harvest_tmp.path }}/upload-headers"
+        content: "Authorization: Bearer {{ lookup('env', 'IB_ARTIFACTS_TOKEN') }}\n"
+        mode: "0600"
+      no_log: true
+      when: airgap_harvest_upload_url | length > 0
+
+    - name: Upload the OS package bundle
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail-with-body
+          - --silent
+          - --show-error
+          - --retry
+          - "3"
+          - --header
+          - "@{{ airgap_harvest_tmp.path }}/upload-headers"
+          - --upload-file
+          - "{{ airgap_harvest_bundle }}"
+          - "{{ airgap_harvest_upload_url | regex_replace('/$', '') }}/{{ airgap_os_bundle_name | urlencode }}"
+      changed_when: true
+      when: airgap_harvest_upload_url | length > 0
+  always:
+    - name: Remove the work directory
+      ansible.builtin.file:
+        path: "{{ airgap_harvest_tmp.path }}"
+        state: absent

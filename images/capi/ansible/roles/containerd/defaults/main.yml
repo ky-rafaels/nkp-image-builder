@@ -52,3 +52,7 @@ containerd_fips_sha256: ""
 # packages.d2iq.com publishes no checksums.
 containerd_bundle_url: ""
 containerd_bundle_sha256: ""
+# A bundle file on the Ansible controller to upload instead of downloading
+# one, FIPS or not. Air-gapped builds (roles/airgap) pick it from their
+# artifacts directory when it's empty (tasks/airgap-bundle.yml).
+containerd_bundle_file: ""

@@ -168,6 +168,26 @@ containerd: {}
 #    bundles:
 #      rockylinux-9: {distro: rocky-9.8, sha256: "<64 hex chars>"}
 
+# -- Air-gapped builds, which need nothing but Prism Central: the build VM
+# installs only from the artifact store, a PersistentVolume of the UI where you
+# upload an NKP release's image-artifacts folder (containerd bundles and
+# images/) and OS package bundles. An online build with "Online, save OS
+# packages" (on a connected site, from the same base image) puts the OS package
+# bundle for that OS, Kubernetes version and options there; copy it to the
+# air-gapped store. Air-gapped builds boot from an image already in Prism
+# Central. See README.md "Air-gapped builds".
+airgap:
+  enabled: false
+  persistence:
+    # ReadWriteOnce is enough: build pods download what they need from the UI.
+    size: 50Gi
+    storageClassName: ""     # "" = the cluster default
+    existingClaim: ""
+  # Build pods' emptyDir for the downloaded artifacts or harvested packages.
+  buildVolumeSizeLimit: 40Gi
+  # Largest single upload, in bytes (20 GiB).
+  maxUploadBytes: 21474836480
+
 # -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
 # fips=1, FIPS crypto policy, dracut fips module) before provisioning and
 # installs Kubernetes, containerd and runc built with BoringCrypto (a FIPS 140

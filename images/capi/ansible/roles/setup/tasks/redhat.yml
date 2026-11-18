@@ -53,8 +53,10 @@
             content: ""
             mode: "0600"
 
+# A harvesting build (roles/airgap) keeps the downloaded packages.
 - name: Perform dnf clean
-  ansible.builtin.command: /usr/bin/yum -y clean all
+  ansible.builtin.command: >-
+    /usr/bin/yum -y clean {{ 'metadata dbcache expire-cache' if (airgap_harvest_dir | default('')) | length > 0 else 'all' }}
   when: setup_dnf_clean | bool
 
 - name: Enable the EPEL repository
@@ -84,6 +86,14 @@
 
 - name: Import RPM repository tasks
   ansible.builtin.import_tasks: rpm_repos.yml
+
+# disable_public_repos (always on for air-gapped builds) also disabled the
+# air-gapped repo that ansible/airgap-prepare.yml configured; put it back.
+- name: Install from the air-gapped OS package bundles
+  ansible.builtin.include_role:
+    name: airgap
+    tasks_from: repo-again
+  when: (airgap_artifacts_dir | default('')) | length > 0
 
 - name: Perform a yum update  # noqa: package-latest
   ansible.builtin.dnf:

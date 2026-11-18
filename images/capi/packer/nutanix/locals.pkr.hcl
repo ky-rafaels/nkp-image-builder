@@ -21,6 +21,18 @@ locals {
   # GPU: see the nutanix_gpu_name and gpu_* variables.
   gpu_enabled = var.nutanix_gpu_name != ""
 
+  # Air-gapped builds (airgap_artifacts_dir): every repo but the uploaded OS
+  # package bundles is disabled until sysprep, and nothing is downloaded.
+  airgap = var.airgap_artifacts_dir != ""
+  # Tools uploaded to the VM from the build pod (the builder image ships them)
+  # instead of downloaded there; empty when vm_tools_dir doesn't have them.
+  goss_local_binary = (
+    var.vm_tools_dir != "" && length(fileset(var.vm_tools_dir, "goss-${var.goss_version}-linux-${var.goss_arch}")) > 0
+  ) ? "${var.vm_tools_dir}/goss-${var.goss_version}-linux-${var.goss_arch}" : ""
+  mindthegap_local_binary = (
+    var.vm_tools_dir != "" && length(fileset(var.vm_tools_dir, "mindthegap-linux-amd64")) > 0
+  ) ? "${var.vm_tools_dir}/mindthegap-linux-amd64" : ""
+
   # Where the goss provisioner puts its binary (the plugin's default path,
   # made explicit). STIG builds use /opt/image-builder instead, because the
   # STIG remediation mounts /tmp noexec before goss runs, and allow exactly
@@ -122,6 +134,13 @@ locals {
       gpu_nvidia_vgpu_driver_url       = var.gpu_nvidia_vgpu_driver_url
       gpu_nvidia_vgpu_driver_sha256    = var.gpu_nvidia_vgpu_driver_sha256
       gpu_nvidia_vgpu_license_token    = var.gpu_nvidia_vgpu_license_token
+      airgap_artifacts_dir             = var.airgap_artifacts_dir
+      airgap_os_package_bundles        = compact(split(" ", var.airgap_os_package_bundles))
+      airgap_harvest_dir               = var.airgap_harvest_dir
+      airgap_harvest_upload_url        = var.airgap_harvest_upload_url
+      airgap_mindthegap_binary         = local.mindthegap_local_binary
+      goss_local_binary                = local.goss_local_binary
+      goss_download_path               = local.goss_download_path
     }),
     "--scp-extra-args=${local.ansible_scp_extra_args}",
   ]
@@ -172,7 +191,7 @@ locals {
     "node_custom_roles_post=\"${var.node_custom_roles_post}\"",
     "node_custom_roles_post_sysprep=\"${var.node_custom_roles_post_sysprep}\"",
     "node_ansible_tmpdir=\"${var.node_ansible_tmpdir}\"",
-    "disable_public_repos=${var.disable_public_repos}",
+    "disable_public_repos=${local.airgap ? "true" : var.disable_public_repos}",
     "extra_debs=\"${var.extra_debs}\"",
     "extra_kernel_boot_params=\"${var.extra_kernel_boot_params}\"",
     "extra_repos=\"${var.extra_repos}\"",
@@ -201,8 +220,8 @@ locals {
     "no_proxy=${var.no_proxy}",
     "pip_conf_file=${var.pip_conf_file}",
     "python_path=${var.python_path}",
-    "redhat_epel_rpm=${var.redhat_epel_rpm}",
-    "epel_rpm_gpg_key=${var.epel_rpm_gpg_key}",
+    "redhat_epel_rpm=${local.airgap ? "" : var.redhat_epel_rpm}",
+    "epel_rpm_gpg_key=${local.airgap ? "" : var.epel_rpm_gpg_key}",
     "reenable_public_repos=${var.reenable_public_repos}",
     "remove_extra_repos=${var.remove_extra_repos}",
     "systemd_prefix=${var.systemd_prefix}",

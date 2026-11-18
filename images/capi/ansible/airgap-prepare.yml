@@ -1,0 +1,51 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# First step of every build, before the FIPS and STIG steps install their
+# first packages. An air-gapped build (airgap_artifacts_dir) checks its
+# artifacts and makes the uploaded OS package bundles the only package
+# repos; a harvesting build (airgap_harvest_dir) starts keeping the
+# packages it downloads (roles/airgap). Does nothing, without connecting,
+# for other builds.
+---
+- name: Prepare the build VM for an air-gapped or harvesting build
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    node_environment:
+      http_proxy: "{{ http_proxy | default('') }}"
+      https_proxy: "{{ https_proxy | default('') }}"
+      no_proxy: "{{ no_proxy | default('') }}"
+      HTTP_PROXY: "{{ http_proxy | default('') }}"
+      HTTPS_PROXY: "{{ https_proxy | default('') }}"
+      NO_PROXY: "{{ no_proxy | default('') }}"
+      PYTHONPATH: "{{ python_path }}"
+
+  tasks:
+    - name: Skip unless the build is air-gapped or harvesting
+      ansible.builtin.meta: end_play
+      when: >-
+        (airgap_artifacts_dir | default('')) | length == 0
+        and (airgap_harvest_dir | default('')) | length == 0
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Prepare the air-gapped or harvesting build
+      ansible.builtin.include_role:
+        name: airgap
+        tasks_from: prepare
+
+  environment: "{{ node_environment }}"

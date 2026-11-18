@@ -36,6 +36,10 @@ type server struct {
 	// gpus lists the build cluster's GPUs from Prism Central; nil when GPU
 	// discovery is off or has no credentials.
 	gpus gpuLister
+	// artifacts is the air-gapped builds' artifact store; nil when off.
+	artifacts *artifactStore
+	// artifactsToken lets build pods use the artifact store.
+	artifactsToken string
 }
 
 func main() {
@@ -64,6 +68,14 @@ func main() {
 	}
 
 	s := &server{cfg: cfg, builds: &Builds{cfg: cfg, client: client}, log: log, fipsCheck: checkFIPSRepo}
+	if cfg.Airgap.Enabled {
+		s.artifacts = &artifactStore{dir: cfg.Airgap.ArtifactsDir}
+		s.artifactsToken = os.Getenv("ARTIFACTS_TOKEN")
+		if s.artifactsToken == "" {
+			log.Error("airgap.enabled needs the artifacts token in $ARTIFACTS_TOKEN")
+			os.Exit(1)
+		}
+	}
 	if cfg.GPU.Enabled && cfg.GPU.Discovery {
 		if pc, err := newPrismClientFromEnv(); err != nil {
 			log.Warn("GPU discovery off: users type the GPU name instead", "err", err)
@@ -116,6 +128,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/builds/{id}", s.handleGet)
 	mux.HandleFunc("DELETE /api/builds/{id}", s.handleDelete)
 	mux.HandleFunc("GET /api/builds/{id}/logs", s.handleLogs)
+	mux.HandleFunc("GET /api/artifacts", s.handleArtifactList)
+	mux.HandleFunc("GET /api/artifacts/{name...}", s.handleArtifactGet)
+	mux.HandleFunc("PUT /api/artifacts/{name...}", s.handleArtifactPut)
+	mux.HandleFunc("DELETE /api/artifacts/{name...}", s.handleArtifactDelete)
 
 	static, _ := fs.Sub(webFS, "web")
 	mux.Handle("GET /", http.FileServerFS(static))
@@ -124,7 +140,8 @@ func (s *server) routes() http.Handler {
 }
 
 // withMiddleware adds security headers, optional basic auth, and a same-origin
-// check for state-changing requests.
+// check for state-changing requests. Build pods use the artifact store with
+// the artifacts token instead of basic auth.
 func (s *server) withMiddleware(next http.Handler) http.Handler {
 	user, pass := os.Getenv("BASIC_AUTH_USERNAME"), os.Getenv("BASIC_AUTH_PASSWORD")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +151,7 @@ func (s *server) withMiddleware(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
 
-		if user != "" && r.URL.Path != "/healthz" {
+		if user != "" && r.URL.Path != "/healthz" && !artifactTokenOK(r, s.artifactsToken) {
 			u, p, ok := r.BasicAuth()
 			if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
 				subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
@@ -186,6 +203,12 @@ type configResponse struct {
 	FIPS          fipsInfo      `json:"fips"`
 	STIG          stigInfo      `json:"stig"`
 	GPU           gpuInfo       `json:"gpu"`
+	Airgap        airgapInfo    `json:"airgap"`
+}
+
+type airgapInfo struct {
+	Enabled        bool  `json:"enabled"`
+	MaxUploadBytes int64 `json:"maxUploadBytes"`
 }
 
 type stigInfo struct {
@@ -235,6 +258,7 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 			},
 			DriverBranch: s.cfg.GPU.NVIDIA.Branch(),
 		},
+		Airgap: airgapInfo{Enabled: s.cfg.Airgap.Enabled, MaxUploadBytes: s.cfg.Airgap.MaxUploadBytes},
 	})
 }
 
@@ -265,13 +289,22 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	fe := s.fipsPreflight(r.Context(), &req)
-	for k, v := range s.gpuPreflight(r.Context(), &req) {
-		if fe == nil {
-			fe = fieldErrors{}
+	var fe fieldErrors
+	merge := func(more fieldErrors) {
+		for k, v := range more {
+			if fe == nil {
+				fe = fieldErrors{}
+			}
+			fe[k] = v
 		}
-		fe[k] = v
 	}
+	// An air-gapped build gets its FIPS packages from the artifact store, not
+	// the FIPS repo this checks.
+	if !req.Airgap {
+		merge(s.fipsPreflight(r.Context(), &req))
+	}
+	merge(s.gpuPreflight(r.Context(), &req))
+	merge(s.airgapPreflight(&req))
 	if fe != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation failed", fe)
 		return
@@ -287,7 +320,8 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		gpu = req.GPU.Name + " (" + req.GPU.Mode + ")"
 	}
 	s.log.Info("build created", "id", b.ID, "os", req.OS, "kubernetes", req.KubernetesVersion,
-		"image", req.ImageName, "cluster", req.ClusterName, "gpu", gpu, "remote", r.RemoteAddr)
+		"image", req.ImageName, "cluster", req.ClusterName, "gpu", gpu, "airgap", req.Airgap,
+		"harvest", req.HarvestPackages, "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusCreated, b)
 }
 

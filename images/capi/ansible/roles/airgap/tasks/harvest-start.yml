@@ -1,0 +1,55 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Harvesting build: keep every package dnf/apt downloads until sysprep, where
+# harvest.yml turns them into an OS package bundle. The setup role's dnf clean
+# keeps packages while harvesting.
+---
+- name: Check for an existing dnf keepcache setting
+  ansible.builtin.command: grep -Eq '^\s*keepcache\s*=' /etc/dnf/dnf.conf
+  register: airgap_keepcache_set
+  changed_when: false
+  failed_when: airgap_keepcache_set.rc > 1
+  when: ansible_facts['os_family'] == 'RedHat'
+
+# The marker tells cleanup.yml this build added the setting.
+- name: Keep downloaded packages (dnf)
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - airgap_keepcache_set.rc != 0
+  block:
+    - name: Set keepcache in dnf.conf
+      community.general.ini_file:
+        path: /etc/dnf/dnf.conf
+        section: main
+        option: keepcache
+        value: "1"
+        no_extra_spaces: true
+        mode: "0644"
+
+    - name: Mark keepcache as added by the build
+      ansible.builtin.copy:
+        dest: /etc/dnf/.image-builder-keepcache
+        content: ""
+        mode: "0600"
+
+- name: Keep downloaded packages (apt)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99image-builder-keep-packages
+    content: |
+      // Harvesting build: keep downloaded packages. Removed by sysprep.
+      APT::Keep-Downloaded-Packages "true";
+      Binary::apt::APT::Keep-Downloaded-Packages "true";
+    mode: "0644"
+  when: ansible_facts['os_family'] == 'Debian'

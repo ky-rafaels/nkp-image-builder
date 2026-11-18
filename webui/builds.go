@@ -57,6 +57,20 @@ type BuildRequest struct {
 	// GPU attaches a GPU from the build cluster to the build VM and installs
 	// the NVIDIA driver for it.
 	GPU *GPURequest `json:"gpu,omitempty"`
+	// Airgap builds from the artifact store alone (airgap.go): the build VM
+	// downloads nothing and boots from SourceImage.
+	Airgap bool `json:"airgap,omitempty"`
+	// OSPackageBundles are the artifact store's OS package bundles an
+	// air-gapped build installs from. Empty picks the bundle named for the
+	// build's Kubernetes version, OS and options.
+	OSPackageBundles []string `json:"osPackageBundles,omitempty"`
+	// HarvestPackages makes an online build save the packages it installs to
+	// the artifact store, as the OS package bundle for air-gapped builds of
+	// the same OS, base image and options.
+	HarvestPackages bool `json:"harvestPackages,omitempty"`
+	// airgapFiles are the artifacts an air-gapped build's pod downloads
+	// (airgapPreflight).
+	airgapFiles []Artifact
 
 	// Optional per-build credentials.
 	Credentials *BuildCredentials `json:"credentials,omitempty"`
@@ -148,10 +162,13 @@ var deniedExtraVars = map[string]bool{
 	// The GPU is a form option and its driver sources are set in the chart
 	// (gpu.nvidia.*).
 	"nutanix_gpu_name": true,
+	// Tools from the builder image that air-gapped builds rely on.
+	"vm_tools_dir": true,
 }
 
-// deniedExtraVarPrefixes extends deniedExtraVars to whole families.
-var deniedExtraVarPrefixes = []string{"fips_", "stig_", "gpu_"}
+// deniedExtraVarPrefixes extends deniedExtraVars to whole families. Air-gapped
+// builds are a form option too, and their artifacts come from the store.
+var deniedExtraVarPrefixes = []string{"fips_", "stig_", "gpu_", "airgap_"}
 
 // buildWrapper runs `make <target>` in its own process group and turns the
 // pod's SIGTERM (cancel / delete) into a SIGINT for the whole group -- the same
@@ -234,6 +251,9 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		&r.SubnetName, &r.SourceImageURL, &r.SourceImage, &r.HTTPProxy, &r.HTTPSProxy, &r.NoProxy,
 		&r.ExtraDebs, &r.ExtraRPMs} {
 		trim(s)
+	}
+	for i := range r.OSPackageBundles {
+		trim(&r.OSPackageBundles[i])
 	}
 	if r.KubernetesVersion == "" {
 		r.KubernetesVersion = d.KubernetesVersion
@@ -389,6 +409,8 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		}
 	}
 
+	r.validateAirgap(cfg, osOpt, ok, errs)
+
 	c := r.Credentials
 	if !c.empty() {
 		if !cfg.Features.AllowCredentialOverride {
@@ -511,6 +533,7 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 			vars[k] = v
 		}
 	}
+	r.airgapPackerVars(cfg, vars)
 	return vars
 }
 
@@ -630,6 +653,40 @@ func buildObjects(cfg *Config, req *BuildRequest, id string) (*corev1.ConfigMap,
 	backoff := int32(0)     // a failed packer build should not silently retry
 	automountToken := false // builds never talk to the Kubernetes API
 
+	podSpec := corev1.PodSpec{
+		RestartPolicy:                 corev1.RestartPolicyNever,
+		ServiceAccountName:            cfg.Builder.ServiceAccountName,
+		AutomountServiceAccountToken:  &automountToken,
+		ImagePullSecrets:              pullSecrets,
+		NodeSelector:                  cfg.Builder.NodeSelector,
+		Tolerations:                   cfg.Builder.Tolerations,
+		TerminationGracePeriodSeconds: cfg.Builder.TerminationGracePeriodSeconds,
+		SecurityContext:               cfg.Builder.PodSecurityContext,
+		Containers: []corev1.Container{{
+			Name:            buildContainer,
+			Image:           cfg.Builder.Image,
+			ImagePullPolicy: cfg.Builder.ImagePullPolicy,
+			Command:         []string{"/bin/bash", "-c", buildWrapper, "build-wrapper"},
+			Args:            []string{"build-nutanix-" + req.OS},
+			Env:             env,
+			EnvFrom:         envFrom,
+			Resources:       cfg.Builder.Resources,
+			SecurityContext: cfg.Builder.SecurityContext,
+			VolumeMounts: []corev1.VolumeMount{{
+				Name: "build-vars", MountPath: varsMountPath, ReadOnly: true,
+			}},
+		}},
+		Volumes: []corev1.Volume{{
+			Name: "build-vars",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
+				},
+			},
+		}},
+	}
+	airgapPod(cfg, req, &podSpec)
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -646,38 +703,7 @@ func buildObjects(cfg *Config, req *BuildRequest, id string) (*corev1.ConfigMap,
 			ActiveDeadlineSeconds:   cfg.Builder.ActiveDeadlineSeconds,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					RestartPolicy:                 corev1.RestartPolicyNever,
-					ServiceAccountName:            cfg.Builder.ServiceAccountName,
-					AutomountServiceAccountToken:  &automountToken,
-					ImagePullSecrets:              pullSecrets,
-					NodeSelector:                  cfg.Builder.NodeSelector,
-					Tolerations:                   cfg.Builder.Tolerations,
-					TerminationGracePeriodSeconds: cfg.Builder.TerminationGracePeriodSeconds,
-					SecurityContext:               cfg.Builder.PodSecurityContext,
-					Containers: []corev1.Container{{
-						Name:            "image-builder",
-						Image:           cfg.Builder.Image,
-						ImagePullPolicy: cfg.Builder.ImagePullPolicy,
-						Command:         []string{"/bin/bash", "-c", buildWrapper, "build-wrapper"},
-						Args:            []string{"build-nutanix-" + req.OS},
-						Env:             env,
-						EnvFrom:         envFrom,
-						Resources:       cfg.Builder.Resources,
-						SecurityContext: cfg.Builder.SecurityContext,
-						VolumeMounts: []corev1.VolumeMount{{
-							Name: "build-vars", MountPath: varsMountPath, ReadOnly: true,
-						}},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "build-vars",
-						VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
-							},
-						},
-					}},
-				},
+				Spec:       podSpec,
 			},
 		},
 	}

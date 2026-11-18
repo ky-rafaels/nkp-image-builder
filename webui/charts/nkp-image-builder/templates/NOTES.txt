@@ -13,6 +13,15 @@ Builds run as Jobs labelled app.kubernetes.io/managed-by=nkp-image-builder-webui
 
 Build pods must be able to reach Prism Central on port {{ .Values.nutanix.credentials.port | default "9440" }} and SSH (22) to
 VMs on the build subnet, plus the internet (or your mirrors/proxy) for packages.
+{{- if .Values.airgap.enabled }}
+
+Air-gapped builds are on: they need only Prism Central. Upload an NKP release's
+image-artifacts folder and OS package bundles under "Air-gapped artifacts" in
+the UI (stored in PVC {{ include "nkpib.artifactsClaimName" . }}). If an nginx
+ingress fronts the UI, allow large uploads:
+  nginx.ingress.kubernetes.io/proxy-body-size: "0"
+  nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+{{- end }}
 {{- if not .Values.auth.basic.enabled }}
 
 WARNING: the UI has no authentication. Anyone who can reach it can start builds
