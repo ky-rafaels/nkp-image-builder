@@ -87,7 +87,7 @@
   ansible.builtin.shell:
     cmd: |
       missing=""
-      for r in {{ (stig_all_exceptions | map(attribute='rule') | list + stig_build_phase_deselect) | join(' ') }}; do
+      for r in {{ (stig_all_exceptions | map(attribute='rule') | list + stig_build_phase_deselect + stig_build_phase_skip) | join(' ') }}; do
         grep -q "id=\"xccdf_org.ssgproject.content_rule_${r}\"" {{ stig_datastream }} || missing="$missing $r"
       done
       if [ -n "$missing" ]; then echo "Unknown STIG rule(s):$missing" >&2; exit 1; fi
@@ -134,6 +134,14 @@
   ansible.builtin.command: fapolicyd-cli --file add {{ item }} --trust-file kubernetes
   loop: "{{ stig_untrusted_executables.stdout_lines }}"
   changed_when: true
+
+- name: Let runc's sealed re-exec load its libraries under fapolicyd
+  ansible.builtin.copy:
+    src: 25-runc.rules
+    dest: /etc/fapolicyd/rules.d/25-runc.rules
+    owner: root
+    group: fapolicyd
+    mode: "0644"
 
 - name: Allow runtime-installed CNI and kubelet plugins in fapolicyd
   ansible.builtin.copy:

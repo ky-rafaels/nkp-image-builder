@@ -75,8 +75,29 @@ locals {
   ansible_scp_extra_args = var.ansible_scp_extra_args_env
 
   # Shared by both ansible provisioners (gpu-prepare.yml and node.yml).
+  # Pipelining runs each task's module over one SSH command instead of
+  # mkdir + copy + chmod + run, and ControlPersist reuses one connection to
+  # Packer's SSH proxy; both matter because a build runs hundreds of tasks.
+  # (Setting ANSIBLE_SSH_ARGS at all replaces Ansible's own default, which is
+  # where ControlPersist normally comes from.) profile_tasks/profile_roles
+  # print each task's duration and the slowest tasks and roles at the end.
+  # No quotes around the value: Packer sets these without a shell, so quotes
+  # reach Ansible literally, and ansible-core >= 2.15 then passes everything
+  # inside them to ssh as one argument ("-o A=1 -o B=2" -> one -o), which
+  # ssh rejects as soon as there is more than one option.
+  # A remote tmp dir per user: ansible.cfg's remote_tmp is one shared
+  # /tmp/.ansible, and with pipelining a module running as root (become)
+  # can be the first to need it and creates it root-owned 0700; the next task
+  # that uploads a file (copy, template) then can't create its tmp dir there
+  # as the SSH user. $USER is expanded on the VM, by the SSH user's shell and
+  # by the module under sudo, so they get /tmp/.ansible-builder and
+  # /tmp/.ansible-root. (Written as $USER without braces, which HCL would
+  # try to interpolate.)
   ansible_env_vars = [
-    "ANSIBLE_SSH_ARGS='${var.existing_ansible_ssh_args} -o IdentitiesOnly=yes'"
+    "ANSIBLE_SSH_ARGS=${var.existing_ansible_ssh_args != "" ? var.existing_ansible_ssh_args : "-o ControlMaster=auto -o ControlPersist=60s"} -o IdentitiesOnly=yes",
+    "ANSIBLE_PIPELINING=True",
+    "ANSIBLE_REMOTE_TMP=/tmp/.ansible-$USER",
+    "ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks,ansible.posix.profile_roles",
   ]
   ansible_extra_arguments = [
     "--extra-vars", local.ansible_common_vars,
@@ -212,6 +233,8 @@ locals {
     "fips_enabled=${local.fips_enabled}",
     "containerd_fips_url=${local.containerd_fips_url}",
     "containerd_fips_sha256=${local.fips_enabled ? var.fips_containerd_sha256 : ""}",
+    "containerd_bundle_url=${local.fips_enabled ? "" : var.containerd_bundle_url}",
+    "containerd_bundle_sha256=${local.fips_enabled ? "" : var.containerd_bundle_sha256}",
     "kubernetes_build_metadata=${local.kubernetes_build_metadata}",
     "kubernetes_coredns_image_repository=${local.fips_enabled ? var.fips_coredns_image_repository : ""}",
     "kubernetes_etcd_image_tag=${local.fips_enabled ? var.fips_etcd_image_tag : ""}",

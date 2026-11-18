@@ -35,10 +35,10 @@ Prism Central, ready for use with Nutanix Kubernetes Platform (NKP).
 | Form field | Packer variable(s) |
 |---|---|
 | Operating system | make target `build-nutanix-<id>` (`packer/nutanix/<id>.json`) |
-| Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y` (the build installs the newest package revision, e.g. `1.36.2-2.1`), `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0` |
+| Kubernetes version `v1.X.Y` | `kubernetes_semver`, `kubernetes_series=v1.X`, `kubernetes_deb_version=1.X.Y` (the build installs the newest package revision, e.g. `1.36.2-2.1`), `kubernetes_rpm_version=1.X.Y`, `crictl_version=1.X.0`, and the containerd NKP ships with that minor: `containerd_version`/`runc_version` 2.1.6/1.3.4 for v1.35 and 2.3.1/1.4.2 for v1.36. Builds of Rocky 9, RHEL 9 and Ubuntu 22.04/24.04 install NKP's own bundle of that containerd (`containerd_bundle_url`/`containerd_bundle_sha256`), so nodes report e.g. `containerd://2.1.6-d2iq.1` or `containerd://2.3.1-d2iq.1`; FIPS builds get the matching `fips_containerd_version`/`fips_containerd_sha256`. Change the pairs with `containerd` in the chart values; an extra var `containerd_version` overrides them for one build |
 | Image name | `image_name` (also the build VM name). Blank uses `defaults.imageNameTemplate`, by default `nkp-<os>[-fips][-stig][-gpu\|-vgpu]-release-<version>-<UTC timestamp>.qcow2`, e.g. `nkp-ubuntu-24.04-release-1.36.1-20261105143022.qcow2` |
 | Cluster / subnet | `nutanix_cluster_name` / `nutanix_subnet_name` |
-| vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb` |
+| vCPU / memory / disk | `cpus` / `memory` / `disk_size_gb`. STIG and GPU builds default to `defaults.largeBuild` (4 vCPU, 8192 MB) instead of `defaults.cpus`/`memoryMB`. |
 | Source image: repo default | `image_url` from `packer/nutanix/<os>.json` (not offered for RHEL and Flatcar) |
 | Source image: Prism Central image | `source_image_uuid` if the value is a UUID, otherwise `source_image_name`. The build boots from that existing image and never modifies or deletes it. |
 | Source image: download URL | `image_url` |
@@ -102,6 +102,21 @@ sources through extra variables.
 
 Ubuntu FIPS isn't offered. It needs an Ubuntu Pro token for the FIPS kernel,
 and there is no FIPS-built Kubernetes `.deb` source to install from.
+
+**Running the UI on FIPS nodes.** The builder image is Ubuntu 24.04. Its
+OpenSSL switches to FIPS mode by itself when the node's kernel has FIPS
+enabled, and the image has no FIPS provider. Without an override, ssh in the
+build pod fails with `PRNG is not seeded`, so Ansible reports the build VM
+`UNREACHABLE`. The image sets `OPENSSL_FORCE_FIPS_MODE=0` to prevent this.
+Builder images built before that change need the variable added through
+`builder.extraEnv`:
+
+```yaml
+builder:
+  extraEnv:
+    - name: OPENSSL_FORCE_FIPS_MODE
+      value: "0"
+```
 
 ## GPU images
 

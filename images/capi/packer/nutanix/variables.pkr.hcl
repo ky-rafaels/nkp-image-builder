@@ -361,6 +361,9 @@ variable "containerd_image_pull_progress_timeout" {
 # containerd/runc are pinned to what NKP itself ships (containerd
 # 2.3.1-d2iq.1 bundles, which are upstream v2.3.1 + runc v1.4.2) so non-FIPS
 # images match NKP's own node images. Keep in step with fips_containerd_version.
+# NKP's Kubernetes 1.35 images use containerd 2.1.6-d2iq.1 (upstream v2.1.6 +
+# runc v1.3.4) instead. The webui installs NKP's own bundles (1.35:
+# 2.1.6-d2iq.1, 1.36: 2.3.1-d2iq.1) through containerd_bundle_url.
 variable "containerd_version" {
   type        = string
   description = "containerd version to install."
@@ -369,6 +372,20 @@ variable "containerd_version" {
 variable "runc_version" {
   type    = string
   default = "1.4.2"
+}
+# Non-FIPS builds: install this containerd + runc bundle (laid out relative to
+# /, like fips_containerd_url) instead of the upstream releases, e.g. NKP's
+# https://packages.d2iq.com/dkp/containerd/containerd-<version>-d2iq.1-<distro>-x86_64.tar.gz.
+# The webui sets both for Kubernetes 1.35 and 1.36 builds.
+variable "containerd_bundle_url" {
+  type        = string
+  description = "containerd + runc bundle to install instead of the upstream releases (non-FIPS builds). Empty uses the upstream releases."
+  default     = ""
+}
+variable "containerd_bundle_sha256" {
+  type        = string
+  description = "sha256 of containerd_bundle_url."
+  default     = ""
 }
 # Real default lives in packer/config/ppc64le/containerd.json; empty on other archs.
 variable "containerd_sha256" {

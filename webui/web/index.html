@@ -44,8 +44,8 @@
           <div class="row">
             <label class="field">
               <span>Kubernetes version</span>
-              <input name="kubernetesVersion" list="k8s-versions" placeholder="v1.36.1" autocomplete="off" required>
-              <datalist id="k8s-versions"></datalist>
+              <select name="kubernetesVersionChoice"></select>
+              <input name="kubernetesVersion" class="hidden" placeholder="v1.34.2" autocomplete="off" spellcheck="false" aria-label="Other Kubernetes version" required>
               <small class="field-error" data-error-for="kubernetesVersion"></small>
             </label>
             <label class="field grow">
@@ -81,6 +81,7 @@
             <label class="field">
               <span>Memory (MB)</span>
               <input name="memoryMB" type="number" min="1024" step="1024">
+              <small class="hint" id="size-hint"></small>
               <small class="field-error" data-error-for="memoryMB"></small>
             </label>
             <label class="field">

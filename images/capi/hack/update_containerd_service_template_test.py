@@ -232,6 +232,74 @@ class UpdateContainerdServiceTemplateTests(unittest.TestCase):
             self.assertEqual(1, rc)
             self.assertIn("not equivalent", stderr.getvalue())
 
+    def run_with_services(self, write, services):
+        def fake_fetch(version):
+            return f"https://example.test/v{version}/containerd.service", services[
+                version
+            ]
+
+        stderr = io.StringIO()
+        with mock.patch.object(
+            self.updater, "parse_args", return_value=SimpleNamespace(write=write)
+        ), mock.patch.object(
+            self.updater, "fetch_containerd_service", side_effect=fake_fetch
+        ), mock.patch("sys.stderr", stderr):
+            rc = self.updater.main()
+        return rc, stderr.getvalue()
+
+    def test_verify_accepts_extra_versions_with_the_same_unit(self):
+        with tempfile.TemporaryDirectory(dir=SCRIPT.parent) as tmp:
+            self.configure_fixture(
+                root=pathlib.Path(tmp),
+                generic_version="2.3.1",
+                ppc64le_version="2.3.1",
+                template_content="service unit\n",
+                template_versions=["2.3.1", "2.1.6"],
+            )
+            rc, _ = self.run_with_services(
+                False, {"2.3.1": "service unit\n", "2.1.6": "service unit\n"}
+            )
+            self.assertEqual(0, rc)
+
+    def test_verify_rejects_extra_versions_with_a_different_unit(self):
+        with tempfile.TemporaryDirectory(dir=SCRIPT.parent) as tmp:
+            self.configure_fixture(
+                root=pathlib.Path(tmp),
+                generic_version="2.3.1",
+                ppc64le_version="2.3.1",
+                template_content="service unit\n",
+                template_versions=["2.3.1", "2.1.6"],
+            )
+            rc, stderr = self.run_with_services(
+                False, {"2.3.1": "service unit\n", "2.1.6": "old service unit\n"}
+            )
+            self.assertEqual(1, rc)
+            self.assertIn("lists 2.1.6", stderr)
+
+    def test_write_keeps_matching_extra_versions_and_drops_others(self):
+        with tempfile.TemporaryDirectory(dir=SCRIPT.parent) as tmp:
+            _, defaults_path = self.configure_fixture(
+                root=pathlib.Path(tmp),
+                generic_version="2.3.1",
+                ppc64le_version="2.3.1",
+                template_content="service unit\n",
+                template_versions=["2.3.1", "2.1.6", "1.7.27"],
+            )
+            rc, stderr = self.run_with_services(
+                True,
+                {
+                    "2.3.1": "service unit\n",
+                    "2.1.6": "service unit\n",
+                    "1.7.27": "old service unit\n",
+                },
+            )
+            self.assertEqual(0, rc)
+            self.assertEqual(
+                ["2.3.1", "2.1.6"],
+                self.updater.service_template_versions(defaults_path),
+            )
+            self.assertIn("Dropping 1.7.27", stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

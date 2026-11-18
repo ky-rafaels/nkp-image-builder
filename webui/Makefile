@@ -38,8 +38,8 @@ images: image-webui image-builder ## Build both images
 
 .PHONY: push
 push: images ## Build and push both images
-	docker push $(WEBUI_IMAGE)
-	docker push $(BUILDER_IMAGE)
+	skopeo copy --dest-tls-verify=false docker-daemon:$(WEBUI_IMAGE) docker://$(WEBUI_IMAGE)
+	skopeo copy --dest-tls-verify=false docker-daemon:$(BUILDER_IMAGE) docker://$(BUILDER_IMAGE)
 
 .PHONY: lint-chart
 lint-chart: ## Lint and render the Helm chart

@@ -1,0 +1,16 @@
+# runc under the STIG's deny-by-default fapolicyd policy (installed by
+# image-builder's stig role). Must sort before 30-patterns.rules.
+#
+# To start a container, runc re-executes itself ("runc init") from a sealed,
+# read-only copy on a private overlayfs mount (its CVE-2019-5736 protection).
+# fapolicyd does not watch that mount, so the first thing it sees of the new
+# process is the kernel loading the dynamic linker, which looks exactly like
+# ld.so being run directly. The ld_so pattern rule in 30-patterns.rules then
+# denies the loader's opens of /etc/ld.so.cache and of the shared libraries
+# the FIPS (BoringCrypto, dynamically linked) runc needs, runc init dies, and
+# every container fails with "can't copy bootstrap data to pipe: write
+# init-p: broken pipe". fapolicyd names that subject exe=/runc.
+#
+# This allows that subject's opens only: not executes, and not any other
+# ld_so-pattern process, so `ld.so <untrusted binary>` stays denied.
+allow perm=open pattern=ld_so exe=/runc : all

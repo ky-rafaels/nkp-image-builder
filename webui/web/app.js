@@ -11,6 +11,8 @@ const state = {
   // GPUs on the build cluster, from Prism Central (GET /api/gpus).
   gpus: { cluster: null, list: null, error: null, loading: false, seq: 0, renderKey: "" },
   gpuTimer: null,
+  // The user typed a vCPU or memory size, so the form stops picking one.
+  sizeEdited: false,
 };
 
 async function api(path, opts = {}) {
@@ -94,16 +96,24 @@ async function loadConfig() {
   $("#stig-option").classList.toggle("hidden", !cfg.stig.enabled);
   $("#gpu-section").classList.toggle("hidden", !cfg.gpu.enabled);
 
-  $("#k8s-versions").replaceChildren(...cfg.catalog.kubernetesVersions.map((v) => el("option", { value: v })));
-
   const f = $("#build-form");
   const d = cfg.defaults;
+  const versions = cfg.catalog.kubernetesVersions || [];
+  f.kubernetesVersionChoice.replaceChildren(
+    ...versions.map((v) => el("option", { value: v }, v)),
+    el("option", { value: OTHER_K8S_VERSION }, "Other version…"));
+  // A default that isn't in the list starts out as a typed version.
+  f.kubernetesVersionChoice.value = versions.includes(d.kubernetesVersion) ? d.kubernetesVersion : OTHER_K8S_VERSION;
   f.kubernetesVersion.value = d.kubernetesVersion || "";
   f.clusterName.value = d.clusterName || "";
   f.subnetName.value = d.subnetName || "";
   f.cpus.value = d.cpus;
   f.memoryMB.value = d.memoryMB;
   f.diskSizeGB.value = d.diskSizeGB;
+  const large = d.largeBuild;
+  $("#size-hint").textContent = large && (large.cpus !== d.cpus || large.memoryMB !== d.memoryMB)
+    ? `STIG and GPU builds start at ${large.cpus} vCPU, ${large.memoryMB} MB`
+    : "";
   f.httpProxy.value = d.httpProxy || "";
   f.httpsProxy.value = d.httpsProxy || "";
   f.noProxy.value = d.noProxy || "";
@@ -118,8 +128,28 @@ function selectedOS() {
   return state.config.catalog.operatingSystems.find((o) => o.id === id);
 }
 
+// The last entry in the Kubernetes version dropdown; it shows a box for
+// typing any v1.X.Y.
+const OTHER_K8S_VERSION = "other";
+
+// Copies the dropdown's version into the kubernetesVersion input, which the
+// request and image name read. The input is only shown for "Other version…".
+function syncK8sVersion() {
+  const f = $("#build-form");
+  const other = f.kubernetesVersionChoice.value === OTHER_K8S_VERSION;
+  f.kubernetesVersion.classList.toggle("hidden", !other);
+  if (!other) f.kubernetesVersion.value = f.kubernetesVersionChoice.value;
+}
+
+// The control to highlight for a "kubernetesVersion" field error.
+function k8sInputName() {
+  return $("#build-form").kubernetesVersionChoice.value === OTHER_K8S_VERSION
+    ? "kubernetesVersion" : "kubernetesVersionChoice";
+}
+
 function onFormChange() {
   const f = $("#build-form");
+  syncK8sVersion();
   const os = selectedOS();
   if (!os) return;
   const stigBox = f.stig;
@@ -137,6 +167,12 @@ function onFormChange() {
     ? "FIPS kernel mode and crypto policy, with FIPS builds of Kubernetes, containerd and runc."
     : `Not available for ${os.label}. FIPS builds are supported on RHEL 9 and Rocky Linux 9.`;
   const d = state.config.defaults;
+  // STIG and GPU builds get a bigger build VM, until the user sets the size.
+  if (!state.sizeEdited) {
+    const size = (stigSelected() || gpuSelected()) && d.largeBuild ? d.largeBuild : d;
+    f.cpus.value = size.cpus;
+    f.memoryMB.value = size.memoryMB;
+  }
   const version = f.kubernetesVersion.value.trim().replace(/^v/, "") || "…";
   $("#image-name-default").textContent = (d.imageNameTemplate || "")
     .replaceAll("{prefix}", d.imageNamePrefix || "")
@@ -390,7 +426,9 @@ function showErrors(err) {
   for (const [k, msg] of Object.entries(fields)) {
     const slot = $(`[data-error-for="${CSS.escape(k)}"]`);
     if (slot) slot.textContent = msg;
-    const inputName = k === "gpu" ? gpuInputName() : k.startsWith("credentials.") ? "cred." + k.slice(12) : k;
+    const inputName = k === "gpu" ? gpuInputName()
+      : k === "kubernetesVersion" ? k8sInputName()
+      : k.startsWith("credentials.") ? "cred." + k.slice(12) : k;
     const input = $("#build-form").elements[inputName];
     if (input instanceof HTMLElement) {
       input.classList.add("invalid");
@@ -611,8 +649,20 @@ async function onCancel() {
 document.addEventListener("DOMContentLoaded", async () => {
   const f = $("#build-form");
   f.addEventListener("submit", onSubmit);
+  // Before the form's own listener, which reads sizeEdited.
+  for (const name of ["cpus", "memoryMB"]) {
+    f.elements.namedItem(name).addEventListener("input", () => { state.sizeEdited = true; });
+  }
   f.addEventListener("input", onFormChange);
   f.addEventListener("change", onFormChange);
+  // Picking "Other version…" keeps the last version in the box, selected so
+  // typing replaces it.
+  f.kubernetesVersionChoice.addEventListener("change", () => {
+    if (f.kubernetesVersionChoice.value !== OTHER_K8S_VERSION) return;
+    syncK8sVersion();
+    f.kubernetesVersion.focus();
+    f.kubernetesVersion.select();
+  });
   $("#refresh").addEventListener("click", refreshBuilds);
   $("#gpu-refresh").addEventListener("click", () => loadGPUs(true));
   $("#detail-close").addEventListener("click", closeDetail);

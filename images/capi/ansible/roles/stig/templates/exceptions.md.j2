@@ -19,6 +19,11 @@ results.xml / report.html in this directory for the scan of the final image.
 * fapolicyd runs deny-by-default. Non-RPM runtime binaries are in
   /etc/fapolicyd/trust.d/kubernetes and /etc/fapolicyd/rules.d/35-kubernetes.rules
   allows CNI plugins installed into /opt/cni/bin at runtime.
+  /etc/fapolicyd/rules.d/25-runc.rules lets runc's sealed self re-exec
+  (subject `/runc`, which fapolicyd classifies as the ld_so pattern) open the
+  dynamic linker cache and its shared libraries; without it no container can
+  start. It allows opens only, for that subject only; running ld.so directly
+  on an untrusted binary is still denied.
 * CNI plugins may change networking sysctls (e.g. per-interface rp_filter) on
   a running node.
 * The Kubernetes STIG covers the cluster (API server, kubelet configuration,

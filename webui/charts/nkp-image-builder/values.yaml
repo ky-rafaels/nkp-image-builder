@@ -1,7 +1,7 @@
 # -- Web UI image (built from webui/Dockerfile)
 image:
   repository: 10.38.48.51:5000/library/nkp-image-build/nkp-image-builder-webui
-  tag: "v0.2.3"          # defaults to .Chart.AppVersion
+  tag: "v1.0.0"          # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -13,7 +13,7 @@ builder:
   # the Nutanix packer plugin preinstalled). `make -C webui image-builder`.
   image:
     repository: 10.38.48.51:5000/library/nkp-image-build/nkp-image-builder 
-    tag: "v0.2.3"        # defaults to .Chart.AppVersion
+    tag: "v1.0.0"        # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   # Pull secrets for the builder image (names of existing Secrets).
   imagePullSecrets: []
@@ -73,10 +73,20 @@ nutanix:
 defaults:
   clusterName: "SA-GPU"        # Prism Element cluster to build on
   subnetName: "primary"         # subnet for the build VM; must be reachable via SSH from build pods
-  kubernetesVersion: v1.36.1
+  # Preselected in the version dropdown. Blank uses the first of
+  # catalog.kubernetesVersions.
+  kubernetesVersion: ""
   cpus: 2
   memoryMB: 4096
   diskSizeGB: 40
+  # Build VM size for DISA STIG and GPU builds, which compile the NVIDIA
+  # driver, rebuild initramfs images and run OpenSCAP and AIDE over the whole
+  # disk. The form switches to it when STIG or a GPU is picked, until the user
+  # edits the size. The build VM is deleted after the build, so this doesn't
+  # change the image. Never smaller than cpus/memoryMB above.
+  largeBuild:
+    cpus: 4
+    memoryMB: 8192
   imageNamePrefix: "nkp-"
   # Default image name when the form's name field is left blank. Placeholders:
   #   {prefix}    imageNamePrefix above
@@ -127,14 +137,36 @@ catalog:
       label: Flatcar
       # packer/nutanix/flatcar.json names a local file, not a URL.
       requiresImageURL: true
-  # Suggestions in the version picker; users may type any v1.X.Y. Match these
-  # to the Kubernetes versions supported by your NKP release.
+  # Versions in the form's dropdown, newest first. Users can still build any
+  # other v1.X.Y by choosing "Other version…" and typing it. Match these to the
+  # Kubernetes versions supported by your NKP release.
   kubernetesVersions:
     - v1.36.2
-    - v1.36.1
     - v1.35.2
-    - v1.35.0
-    - v1.34.2
+
+# -- containerd and runc for each Kubernetes minor, matching NKP's own node
+# images. Built in:
+#   v1.35: NKP's containerd 2.1.6-d2iq.1 bundle (containerd 2.1.6 + runc 1.3.4)
+#          on rockylinux-9 (rocky-9.8), rhel-9 (rhel-9.6), ubuntu-2204 and
+#          ubuntu-2404; upstream 2.1.6 + runc 1.3.4 on other OSes
+#   v1.36: NKP's containerd 2.3.1-d2iq.1 bundle (containerd 2.3.1 + runc 1.4.2)
+#          on rockylinux-9 (rocky-9.8), rhel-9 (rhel-9.8), ubuntu-2204 and
+#          ubuntu-2404; upstream 2.3.1 + runc 1.4.2 on other OSes
+# Entries here replace the built-in pair for the same minor; other minors get
+# the Packer defaults (containerd 2.3.1, runc 1.4.2). bundles maps an OS ID
+# to NKP's non-FIPS bundle, containerd-<containerd>-d2iq.1-<distro>-x86_64.tar.gz
+# on packages.d2iq.com (or url, e.g. a mirror), with its sha256: D2iQ
+# publishes no checksums. fipsSha256 is the sha256 of
+# containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz; FIPS builds only
+# use the pair when it is set. A build's extra var containerd_version
+# overrides the pair.
+containerd: {}
+#  v1.37:
+#    containerd: 2.3.2
+#    runc: 1.4.3
+#    fipsSha256: "<64 hex chars>"
+#    bundles:
+#      rockylinux-9: {distro: rocky-9.8, sha256: "<64 hex chars>"}
 
 # -- FIPS 140 node images. A FIPS build boots the VM into FIPS mode (kernel
 # fips=1, FIPS crypto policy, dracut fips module) before provisioning and
@@ -169,9 +201,11 @@ fips:
   # usr/local/sbin, etc/systemd/system). If you change the version or URL,
   # set containerdSHA256 to match.
   # Default URL: https://packages.d2iq.com/dkp/containerd/containerd-<version>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz
-  containerdVersion: ""   # default 2.3.1
+  # Setting containerdVersion or containerdURL replaces the per-minor bundle
+  # from `containerd` below for every FIPS build.
+  containerdVersion: ""   # default: the Kubernetes minor's containerd (below), else 2.3.1
   containerdURL: ""
-  containerdSHA256: ""    # default: sha256 of the 2.3.1 bundle
+  containerdSHA256: ""    # default: sha256 of that bundle
 
 # -- DISA STIG hardening (implies FIPS). The build applies the SCAP Security
 # Guide "stig" profile (DISA STIG for RHEL 9) with oscap, tailored with the

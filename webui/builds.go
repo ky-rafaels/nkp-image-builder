@@ -244,12 +244,6 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 	if r.SubnetName == "" {
 		r.SubnetName = d.SubnetName
 	}
-	if r.CPUs == 0 {
-		r.CPUs = d.CPUs
-	}
-	if r.MemoryMB == 0 {
-		r.MemoryMB = d.MemoryMB
-	}
 	if r.DiskSizeGB == 0 {
 		r.DiskSizeGB = d.DiskSizeGB
 	}
@@ -286,6 +280,14 @@ func (r *BuildRequest) normalize(cfg *Config) error {
 		if g.Name == "" {
 			r.GPU = nil
 		}
+	}
+	// Once STIG and the GPU are settled: those builds get a bigger build VM.
+	size := d.vmSize(r.STIG || r.GPU != nil)
+	if r.CPUs == 0 {
+		r.CPUs = size.CPUs
+	}
+	if r.MemoryMB == 0 {
+		r.MemoryMB = size.MemoryMB
 	}
 	if g := r.GPU; g != nil {
 		n := cfg.GPU.NVIDIA
@@ -445,6 +447,21 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	if _, pinned := r.ExtraVars["crictl_version"]; !pinned {
 		set("crictl_version", "1."+minor+".0")
 	}
+	// containerd and runc follow the Kubernetes minor, as in NKP's own node
+	// images, and come from NKP's bundle for the OS when there is one.
+	// Pinning containerd_version via extra vars opts out of all of it.
+	rel, paired := cfg.Containerd["v1."+minor]
+	if _, pinned := r.ExtraVars["containerd_version"]; paired && !pinned {
+		set("containerd_version", rel.Containerd)
+		if _, pinned := r.ExtraVars["runc_version"]; !pinned {
+			set("runc_version", rel.Runc)
+		}
+		_, ownBundle := r.ExtraVars["containerd_bundle_url"]
+		if b, ok := rel.Bundles[r.OS]; ok && !r.FIPS && !ownBundle {
+			set("containerd_bundle_url", b.BundleURL(rel.Containerd))
+			set("containerd_bundle_sha256", b.SHA256)
+		}
+	}
 	set("image_name", r.ImageName)
 	set("nutanix_cluster_name", r.ClusterName)
 	set("nutanix_subnet_name", r.SubnetName)
@@ -465,6 +482,12 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 	if r.FIPS {
 		for k, v := range cfg.FIPS.packerVars(r.KubernetesVersion) {
 			vars[k] = v
+		}
+		// The BoringCrypto bundle for the minor's containerd, unless the chart
+		// names its own (fips.containerdVersion / fips.containerdURL).
+		if paired && rel.FIPSSHA256 != "" && cfg.FIPS.ContainerdVersion == "" && cfg.FIPS.ContainerdURL == "" {
+			vars["fips_containerd_version"] = rel.Containerd
+			vars["fips_containerd_sha256"] = rel.FIPSSHA256
 		}
 		vars["fips_enabled"] = "true"
 	}
@@ -593,6 +616,9 @@ func buildObjects(cfg *Config, req *BuildRequest, id string) (*corev1.ConfigMap,
 		{Name: "ANSIBLE_NOCOLOR", Value: "1"},
 		{Name: "ANSIBLE_FORCE_COLOR", Value: "0"},
 		{Name: "CHECKPOINT_DISABLE", Value: "1"},
+		// Timestamps every line of Packer's output, so the log shows how long
+		// each phase took (the Makefile appends its own flags to this).
+		{Name: "PACKER_FLAGS", Value: "-timestamp-ui"},
 	}
 	env = append(env, cfg.Builder.ExtraEnv...)
 

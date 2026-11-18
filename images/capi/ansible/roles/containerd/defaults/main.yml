@@ -25,10 +25,13 @@ containerd_service_url: ""
 # (etc/systemd/system/containerd.service). It is kept in sync by
 # hack/update-containerd-service-template.py and used to detect when
 # containerd_version has been overridden without a matching
-# containerd_service_url.
+# containerd_service_url. Besides the pins, it keeps older versions that
+# builds select per Kubernetes minor (the webui installs 2.1.6 for 1.35, as
+# NKP does) for as long as their upstream unit still matches.
 containerd_service_template_versions:
   - "2.3.1"
   - "2.3.2"
+  - "2.1.6"
 containerd_runc_url: "https://github.com/opencontainers/runc/releases/download/v{{ runc_version }}/runc.{{ arch }}"
 runc_version: "1.4.2"
 containerd_runc_checksum_url: "https://github.com/opencontainers/runc/releases/download/v{{ runc_version }}/runc.sha256sum"
@@ -41,3 +44,11 @@ containerd_runc_checksum_url: "https://github.com/opencontainers/runc/releases/d
 fips_enabled: false
 containerd_fips_url: ""
 containerd_fips_sha256: ""
+
+# Non-FIPS builds can install a vendor bundle with the same layout instead of
+# the upstream release archive and runc, e.g. NKP's own
+# containerd-<version>-d2iq.1-<distro>-x86_64.tar.gz builds. Its
+# containerd.service is used too. The sha256 is optional but recommended:
+# packages.d2iq.com publishes no checksums.
+containerd_bundle_url: ""
+containerd_bundle_sha256: ""

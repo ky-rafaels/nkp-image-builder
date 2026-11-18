@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,7 +30,78 @@ type Config struct {
 	FIPS     FIPSConfig    `json:"fips"`
 	STIG     STIGConfig    `json:"stig"`
 	GPU      GPUConfig     `json:"gpu"`
+	// Containerd pins containerd and runc per Kubernetes minor ("v1.35").
+	// Entries replace the built-in pair for the same minor.
+	Containerd map[string]ContainerdRelease `json:"containerd"`
 }
+
+// ContainerdRelease is the containerd and runc a build installs for one
+// Kubernetes minor. NKP's containerd-<version>-d2iq.1 bundles are built from
+// the upstream containerd and runc tags, so an OS without a bundle gets those
+// upstream releases; FIPS builds get the BoringCrypto EL9 bundle.
+type ContainerdRelease struct {
+	Containerd string `json:"containerd"`
+	Runc       string `json:"runc"`
+	// FIPSSHA256 is the sha256 of
+	// containerd-<containerd>-d2iq.1-rhel-9.6-x86_64_fips.tar.gz. FIPS builds
+	// only use this pair when it is set.
+	FIPSSHA256 string `json:"fipsSha256"`
+	// Bundles are NKP's own non-FIPS builds of this containerd, by operating
+	// system ID. A build for a listed OS installs its bundle, so containerd
+	// reports NKP's version (e.g. 2.1.6-d2iq.1).
+	Bundles map[string]ContainerdBundle `json:"bundles"`
+}
+
+// ContainerdBundle is one of NKP's containerd + runc bundles. packages.d2iq.com
+// publishes no checksums, so the sha256 is pinned here.
+type ContainerdBundle struct {
+	// Distro names the bundle: containerd-<containerd>-d2iq.1-<distro>-x86_64.tar.gz.
+	Distro string `json:"distro"`
+	// URL replaces the packages.d2iq.com URL, e.g. with a mirror.
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+}
+
+const d2iqContainerdBundleURL = "https://packages.d2iq.com/dkp/containerd/containerd-%s-d2iq.1-%s-x86_64.tar.gz"
+
+// BundleURL is where the bundle for containerd version v is downloaded from.
+func (b ContainerdBundle) BundleURL(v string) string {
+	if b.URL != "" {
+		return b.URL
+	}
+	return fmt.Sprintf(d2iqContainerdBundleURL, v, b.Distro)
+}
+
+// defaultContainerdReleases match NKP's own node images: containerd
+// 2.1.6-d2iq.1 for Kubernetes 1.35 and 2.3.1-d2iq.1 for 1.36. Minors not
+// listed get the Packer defaults (packer/config/containerd.json).
+// containerd 2.3 writes config version 4 and refuses a drop-in newer than
+// config.toml, which 2.1 does not. Both install NKP's bundles where one
+// exists for the OS (no ubuntu-26.04 builds; no rhel-9.8 build of 2.1.6, and
+// the EL9 bundles only need glibc 2.34, so any RHEL 9 minor runs them).
+var defaultContainerdReleases = map[string]ContainerdRelease{
+	"v1.35": {Containerd: "2.1.6", Runc: "1.3.4", FIPSSHA256: "8cf89db611b2a09a3829a054dab0155f04cec32880eb0344825fafa1ed6863e6",
+		Bundles: map[string]ContainerdBundle{
+			"rockylinux-9": {Distro: "rocky-9.8", SHA256: "540f5fc696649481e3634c8fbd7b3016560118530afede34f720576e90e99114"},
+			"rhel-9":       {Distro: "rhel-9.6", SHA256: "d7f1c2e061bf2e619e41bba281cc26545f906d6bc82b49f94d3a09e4954d5496"},
+			"ubuntu-2204":  {Distro: "ubuntu-22.04", SHA256: "89e18f2f188f7ae8a4432f3cd5ea76aec2689fd02e60f93338eee14a3a164872"},
+			"ubuntu-2404":  {Distro: "ubuntu-24.04", SHA256: "1cfa30026773df76220c605485aac5a2c4f88660ffe723c4bd3a658607b846bd"},
+		}},
+	"v1.36": {Containerd: "2.3.1", Runc: "1.4.2", FIPSSHA256: "03fa9bbcb1bd4b509317c26c3a93e2f909d50ca36fd61e3c616ba5a553473020",
+		Bundles: map[string]ContainerdBundle{
+			"rockylinux-9": {Distro: "rocky-9.8", SHA256: "212f233a3214f1031ad88dc05f771992d89fb1ea3135b6a8529458cb631ea1d5"},
+			"rhel-9":       {Distro: "rhel-9.8", SHA256: "03ff4589cee96342fba90fc1fae49c5d87ba3d5e7ea231ca32844573386e3cf6"},
+			"ubuntu-2204":  {Distro: "ubuntu-22.04", SHA256: "590bc3c34e6ee2596c9494104f4a86d0f69d3d00e8f8241a9213c9b17d007d69"},
+			"ubuntu-2404":  {Distro: "ubuntu-24.04", SHA256: "405a67a5984a84945194152b24f69064d378ddc5d7475477ede5d1c17cd7ed9c"},
+		}},
+}
+
+var (
+	reK8sMinor = regexp.MustCompile(`^v1\.[0-9]+$`)
+	reSemver   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	reSHA256   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	reDistro   = regexp.MustCompile(`^[a-z]+-[0-9]+(\.[0-9]+)*$`)
+)
 
 // GPUConfig controls the "Attach a GPU" build option: a GPU or vGPU profile
 // from the build cluster is attached to the build VM, and the NVIDIA driver
@@ -261,7 +333,12 @@ type BuildDefaults struct {
 	CPUs              int    `json:"cpus"`
 	MemoryMB          int    `json:"memoryMB"`
 	DiskSizeGB        int    `json:"diskSizeGB"`
-	ImageNamePrefix   string `json:"imageNamePrefix"`
+	// LargeBuild sizes the build VM for DISA STIG and GPU builds, which
+	// compile the NVIDIA driver, rebuild initramfs images and run OpenSCAP
+	// and AIDE over the whole disk. The build VM is deleted afterwards, so
+	// its size isn't part of the image. Never smaller than CPUs/MemoryMB.
+	LargeBuild      VMSize `json:"largeBuild"`
+	ImageNamePrefix string `json:"imageNamePrefix"`
 	// ImageNameTemplate builds the default image name. Placeholders:
 	// {prefix} ImageNamePrefix, {os} OSOption.ImageNameOS (e.g. ubuntu-24.04),
 	// {version} Kubernetes version without the "v" (e.g. 1.36.1),
@@ -297,9 +374,15 @@ type OSOption struct {
 }
 
 type CatalogConfig struct {
-	OperatingSystems   []OSOption `json:"operatingSystems"`
-	KubernetesVersions []string   `json:"kubernetesVersions"`
+	OperatingSystems []OSOption `json:"operatingSystems"`
+	// KubernetesVersions are the versions in the form's dropdown, newest
+	// first. Users can still pick "Other version…" and type any v1.X.Y.
+	KubernetesVersions []string `json:"kubernetesVersions"`
 }
+
+// defaultKubernetesVersions fill the version dropdown when the config lists
+// none.
+var defaultKubernetesVersions = []string{"v1.36.2", "v1.35.2"}
 
 type FeatureConfig struct {
 	// Let users enter their own Prism Central credentials per build instead
@@ -329,6 +412,28 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if len(cfg.Catalog.OperatingSystems) == 0 {
 		return nil, fmt.Errorf("catalog.operatingSystems must not be empty")
+	}
+	for minor, rel := range cfg.Containerd {
+		if !reK8sMinor.MatchString(minor) {
+			return nil, fmt.Errorf("containerd: key %q must be a Kubernetes minor like v1.35", minor)
+		}
+		if !reSemver.MatchString(rel.Containerd) || !reSemver.MatchString(rel.Runc) {
+			return nil, fmt.Errorf("containerd.%s: containerd and runc must be versions like 2.1.6 and 1.3.4", minor)
+		}
+		if rel.FIPSSHA256 != "" && !reSHA256.MatchString(rel.FIPSSHA256) {
+			return nil, fmt.Errorf("containerd.%s.fipsSha256 must be a lowercase hex sha256", minor)
+		}
+		for osID, b := range rel.Bundles {
+			if b.URL == "" && !reDistro.MatchString(b.Distro) {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s: distro must look like rocky-9.8, or set url", minor, osID)
+			}
+			if u, err := url.Parse(b.URL); b.URL != "" && (err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "") {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s.url must be an http(s) URL", minor, osID)
+			}
+			if !reSHA256.MatchString(b.SHA256) {
+				return nil, fmt.Errorf("containerd.%s.bundles.%s.sha256 must be a lowercase hex sha256", minor, osID)
+			}
+		}
 	}
 	if b := cfg.GPU.NVIDIA.DriverBranch; b != "" && !reDriverBranch.MatchString(b) {
 		return nil, fmt.Errorf("gpu.nvidia.driverBranch must be a driver branch number like 580, not %q", b)
@@ -386,12 +491,24 @@ func (c *Config) applyDefaults() {
 			o.ImageNameOS = reYearMonthOS.ReplaceAllString(o.ID, "$1$2.$3")
 		}
 	}
+	if c.Containerd == nil {
+		c.Containerd = map[string]ContainerdRelease{}
+	}
+	for minor, rel := range defaultContainerdReleases {
+		if _, ok := c.Containerd[minor]; !ok {
+			c.Containerd[minor] = rel
+		}
+	}
 	d := &c.Defaults
 	if d.ImageNameTemplate == "" {
 		d.ImageNameTemplate = defaultImageNameTemplate
 	}
+	if len(c.Catalog.KubernetesVersions) == 0 {
+		c.Catalog.KubernetesVersions = slices.Clone(defaultKubernetesVersions)
+	}
+	// The preselected version is the first one in the dropdown.
 	if d.KubernetesVersion == "" {
-		d.KubernetesVersion = "v1.36.1"
+		d.KubernetesVersion = c.Catalog.KubernetesVersions[0]
 	}
 	if d.CPUs == 0 {
 		d.CPUs = 2
@@ -402,6 +519,32 @@ func (c *Config) applyDefaults() {
 	if d.DiskSizeGB == 0 {
 		d.DiskSizeGB = 40
 	}
+	if d.LargeBuild.CPUs == 0 {
+		d.LargeBuild.CPUs = defaultLargeBuildCPUs
+	}
+	if d.LargeBuild.MemoryMB == 0 {
+		d.LargeBuild.MemoryMB = defaultLargeBuildMemoryMB
+	}
+	d.LargeBuild.CPUs = max(d.LargeBuild.CPUs, d.CPUs)
+	d.LargeBuild.MemoryMB = max(d.LargeBuild.MemoryMB, d.MemoryMB)
+}
+
+type VMSize struct {
+	CPUs     int `json:"cpus"`
+	MemoryMB int `json:"memoryMB"`
+}
+
+const (
+	defaultLargeBuildCPUs     = 4
+	defaultLargeBuildMemoryMB = 8192
+)
+
+// vmSize is the default build VM size for a request.
+func (d BuildDefaults) vmSize(large bool) VMSize {
+	if large {
+		return d.LargeBuild
+	}
+	return VMSize{CPUs: d.CPUs, MemoryMB: d.MemoryMB}
 }
 
 func (c *Config) osByID(id string) (OSOption, bool) {

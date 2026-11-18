@@ -79,6 +79,14 @@ stig_extra_exceptions: []
 stig_build_phase_deselect:
   - sudo_remove_nopasswd
 
+# Deselected while provisioning and NOT re-applied by the deferred step,
+# because packer/files/stig/finalize-stig.sh does the work itself, once,
+# after the image is complete: aide_build_database's fix runs `aide --init`
+# over the whole filesystem, and finalize rebuilds the baseline anyway right
+# before the final scan (which still checks the rule).
+stig_build_phase_skip:
+  - aide_build_database
+
 # V-258149 (CAT II): remote log host, "host:port" over TCP. Empty leaves it a
 # finding to be met by the site's logging configuration.
 stig_remote_syslog: ""

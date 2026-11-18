@@ -111,7 +111,11 @@ for _ in $(seq 1 30); do "${CTR}" version >/dev/null 2>&1 && break; sleep 1; don
 # process) using kube-proxy from the pre-pulled control plane images.
 image="$("${CTR}" -n k8s.io images ls -q | grep -E '/kube-proxy:' | head -1)"
 if [[ -n "${image}" ]]; then
-  "${CTR}" -n k8s.io run --rm --net-host "${image}" stig-smoke-test /usr/local/bin/kube-proxy --version
+  if ! "${CTR}" -n k8s.io run --rm --net-host "${image}" stig-smoke-test /usr/local/bin/kube-proxy --version; then
+    echo "A container could not start with fapolicyd enforcing. Recent fapolicyd denials:" >&2
+    ausearch -m FANOTIFY -ts recent -i 2>/dev/null | grep -E "^type=(SYSCALL|PATH|FANOTIFY)" | tail -n 15 >&2 || true
+    exit 1
+  fi
 else
   echo "No kube-proxy image found; skipping the container start test." >&2
 fi
@@ -148,7 +152,10 @@ if [[ -x /usr/local/sbin/grow-var-lv ]]; then
   echo "OK: grow-var-lv runs under fapolicyd."
 fi
 
-section "Rebuilding the AIDE baseline"
+# The only AIDE baseline the build makes: the STIG role leaves
+# aide_build_database out of the provisioning pass (stig_build_phase_skip), so
+# the whole filesystem is hashed once, after everything else has changed it.
+section "Building the AIDE baseline"
 aide --init >/dev/null
 mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
 

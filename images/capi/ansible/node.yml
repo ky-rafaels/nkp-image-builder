@@ -20,6 +20,9 @@
     node_custom_roles_post: ""
     custom_role_names: ""
     node_ansible_tmpdir: ""
+    # GPU builds already ran the setup role (dnf clean + upgrade) in
+    # gpu-prepare.yml, so keep the metadata it downloaded.
+    setup_dnf_clean: "{{ not (gpu_enabled | default(false) | bool) }}"
     system: linux
     arch_uname: "{{ ansible_facts['architecture'] }}"
     arch: "{{ {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ppc64le': 'ppc64le'}.get(arch_uname, 'unsupported') }}"

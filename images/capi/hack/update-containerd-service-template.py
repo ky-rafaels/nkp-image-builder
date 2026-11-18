@@ -187,6 +187,18 @@ def main():
         return 1
     url, expected, supported_versions = resolved
 
+    # Older versions listed beyond the pins (builds that pin containerd per
+    # Kubernetes minor, such as the webui's 1.35 builds) stay supported while
+    # their upstream unit still matches the template.
+    listed_versions = service_template_versions(CONTAINERD_DEFAULTS)
+    diverged = []
+    for extra in [v for v in listed_versions if v not in supported_versions]:
+        extra_url, extra_service = fetch_containerd_service(extra)
+        if extra_service == expected:
+            supported_versions.append(extra)
+        else:
+            diverged.append((extra, extra_url, extra_service))
+
     current = CONTAINERD_SERVICE_TEMPLATE.read_text(encoding="utf-8")
 
     if args.write:
@@ -198,6 +210,12 @@ def main():
             print(f"Updated {CONTAINERD_SERVICE_TEMPLATE.relative_to(ROOT)} from {url}")
             changed = True
 
+        for extra, _, _ in diverged:
+            print(
+                f"Dropping {extra} from containerd_service_template_versions: "
+                "its upstream containerd.service no longer matches the template.",
+                file=sys.stderr,
+            )
         if write_service_template_versions(CONTAINERD_DEFAULTS, supported_versions):
             print(
                 "Updated containerd_service_template_versions in "
@@ -210,7 +228,7 @@ def main():
             print("Nothing to update.")
         return 0
 
-    template_versions = service_template_versions(CONTAINERD_DEFAULTS)
+    template_versions = listed_versions
     problems = []
 
     if current != expected:
@@ -235,6 +253,14 @@ def main():
                 url,
             )
         )
+
+    for extra, extra_url, extra_service in diverged:
+        print(
+            f"containerd_service_template_versions lists {extra}, but its "
+            "upstream containerd.service differs from the template:",
+            file=sys.stderr,
+        )
+        sys.stderr.writelines(unified_diff(expected, extra_service, url, extra_url))
 
     if "pin_mismatch" in problems:
         print(
