@@ -363,7 +363,15 @@ supports.
 make test                       # unit tests (uses client-go fake clientset)
 make run                        # run against current kubeconfig using hack/dev-config.json
 make lint-chart
+make scan                       # build the UI image; fail on any CVE that has a fix (Trivy)
+make vulncheck                  # govulncheck over the Go code and modules
 ```
+
+The UI image is the Go binary on distroless `static-debian13:nonroot`, so
+scanners report CVEs from the Go release and modules compiled into it. To clear
+new ones, raise `GO_VERSION` in the Dockerfile to the latest patch of a
+supported Go release, update go.mod (`go get -u ./... && go mod tidy`), and
+rebuild.
 
 ## Limitations
 

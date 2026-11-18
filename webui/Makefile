@@ -12,6 +12,7 @@ NAMESPACE ?= nkp-image-builder
 RELEASE ?= nkp-image-builder
 CHART := charts/nkp-image-builder
 VALUES ?=
+TRIVY_IMAGE ?= aquasec/trivy:0.69.1
 
 .PHONY: help
 help: ## Show targets
@@ -35,6 +36,17 @@ image-builder: ## Build the image-builder job image from ../images/capi (packer 
 
 .PHONY: images
 images: image-webui image-builder ## Build both images
+
+# The web UI image is the binary on distroless, so its CVEs come from the Go
+# release and modules compiled in: bump GO_VERSION (Dockerfile) and go.mod.
+.PHONY: scan
+scan: image-webui ## Build the web UI image and fail if it has a CVE with a fix
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(TRIVY_IMAGE) image \
+		--scanners vuln --ignore-unfixed --exit-code 1 $(WEBUI_IMAGE)
+
+.PHONY: vulncheck
+vulncheck: ## Report known vulnerabilities in the Go code and modules (govulncheck)
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: push
 push: images ## Build and push both images
