@@ -500,6 +500,22 @@ func (r *BuildRequest) packerVars(cfg *Config) map[string]string {
 		if cfg.STIG.RemoteSyslog != "" {
 			vars["stig_remote_syslog"] = cfg.STIG.RemoteSyslog
 		}
+		if cfg.STIG.GrubSuperuser != "" {
+			vars["stig_grub_superuser"] = cfg.STIG.GrubSuperuser
+		}
+		if len(cfg.STIG.NTPServers) > 0 {
+			vars["stig_ntp_servers"] = strings.Join(cfg.STIG.NTPServers, ",")
+		}
+		if len(cfg.STIG.DNSServers) > 0 {
+			vars["stig_dns_servers"] = strings.Join(cfg.STIG.DNSServers, ",")
+		}
+		if g := cfg.STIG.SudoAdminGroup; g != nil {
+			vars["stig_sudo_admin_group"] = *g
+		}
+		if len(cfg.STIG.ExtraAuthorizedLocalUsers) > 0 {
+			b, _ := json.Marshal(cfg.STIG.ExtraAuthorizedLocalUsers)
+			vars["stig_extra_authorized_local_users"] = string(b)
+		}
 	}
 	if g := r.GPU; g != nil {
 		vars["nutanix_gpu_name"] = g.Name

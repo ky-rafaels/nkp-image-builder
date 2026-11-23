@@ -223,6 +223,26 @@ stig:
   enabled: true
   # host:port of the site's remote log host, TCP (V-258149). Empty leaves an open finding.
   remoteSyslog: ""
+  # Name of the GRUB superuser the password belongs to (V-257789, CAT I).
+  # Empty: "bootadmin".
+  grubSuperuser: ""
+  # Time sources, set with chrony's server directive (V-257945). Empty: the
+  # STIG profile's DoD source, 0.us.pool.ntp.mil. Servers announced by DHCP
+  # are still used.
+  ntpServers: []
+  # Two or more DNS servers every node uses in place of DHCP's (V-257948).
+  # Empty leaves DNS to DHCP, which passes only if it announces two.
+  dnsServers: []
+  # Members of this group sudo into SELinux sysadm_t (V-272496) and must be
+  # mapped to SELinux staff_u (semanage login -a -s staff_u USER). Unset:
+  # wheel. "" leaves it an open finding.
+  # sudoAdminGroup: wheel
+  # Local accounts allowed besides the ones the image needs (V-258058), such
+  # as the node SSH user the cluster creates with cloud-init. The image itself
+  # passes without them; running nodes need them.
+  extraAuthorizedLocalUsers: []
+  #  - name: nodeadmin
+  #    reason: Node SSH user created by cloud-init.
   # Site-approved exceptions, added to the built-in Kubernetes ones. Rule IDs
   # are SCAP Security Guide rule names (the build fails on unknown ones).
   extraExceptions: []

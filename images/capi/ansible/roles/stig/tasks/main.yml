@@ -65,6 +65,9 @@
          | default(stig_profile_info.stdout | regex_search('Title: (.*)', '\1') | first, true) }}
     stig_ssg_version: "{{ stig_ssg_rpm.stdout }}"
 
+- name: Work out the tailored values and check the site settings
+  ansible.builtin.include_tasks: values.yml
+
 - name: Create the STIG evidence directory
   ansible.builtin.file:
     path: "{{ stig_report_dir }}"
@@ -87,10 +90,14 @@
   ansible.builtin.shell:
     cmd: |
       missing=""
-      for r in {{ (stig_all_exceptions | map(attribute='rule') | list + stig_build_phase_deselect + stig_build_phase_skip) | join(' ') }}; do
+      for r in {{ stig_named_rules | join(' ') }}; do
         grep -q "id=\"xccdf_org.ssgproject.content_rule_${r}\"" {{ stig_datastream }} || missing="$missing $r"
       done
       if [ -n "$missing" ]; then echo "Unknown STIG rule(s):$missing" >&2; exit 1; fi
+  vars:
+    stig_named_rules: >-
+      {{ stig_all_exceptions | map(attribute='rule') | list
+         + stig_build_phase_deselect + stig_build_phase_skip + stig_final_reapply }}
   changed_when: false
 
 - name: Check the tailored profile resolves
@@ -111,7 +118,10 @@
       STIG_DATASTREAM={{ stig_datastream }}
       STIG_TAILORING={{ stig_report_dir }}/tailoring.xml
       STIG_PROFILE=xccdf_org.ssgproject.content_profile_stig_kubernetes_node
-      STIG_BUILD_PHASE_RULES="{{ stig_build_phase_deselect | map('regex_replace', '^', 'xccdf_org.ssgproject.content_rule_') | join(' ') }}"
+      STIG_BUILD_PHASE_RULES="{{ stig_final_rules | map('regex_replace', '^', 'xccdf_org.ssgproject.content_rule_') | join(' ') }}"
+  vars:
+    # Deferred rules, and rules later build steps undo.
+    stig_final_rules: "{{ stig_build_phase_deselect + stig_final_reapply }}"
 
 # --- Kubernetes allowances that must exist before fapolicyd starts enforcing.
 
@@ -164,27 +174,6 @@
       {% endfor %}
   when: stig_fapolicyd_build_allow_paths | length > 0
 
-# --- Site-specific settings the STIG can't remediate generically.
-
-- name: Set the GRUB superuser password (V-257787)
-  ansible.builtin.copy:
-    dest: /boot/grub2/user.cfg
-    content: "GRUB2_PASSWORD={{ stig_grub_password_hash }}\n"
-    owner: root
-    group: root
-    mode: "0600"
-  no_log: true
-  when: stig_grub_password_hash | length > 0
-
-- name: Forward logs to the remote log host (V-258149)
-  ansible.builtin.copy:
-    dest: /etc/rsyslog.d/90-remote-loghost.conf
-    content: |
-      # DISA STIG V-258149: off-load audit and system logs.
-      *.* @@{{ stig_remote_syslog }}
-    mode: "0644"
-  when: stig_remote_syslog | length > 0
-
 # --- Remediation.
 
 - name: Install packages that other STIG rules depend on
@@ -227,6 +216,11 @@
     executable: /bin/bash
   register: stig_grub_cmdline
   changed_when: stig_grub_cmdline.stdout is search('^changed')
+
+# Settings the profile has no generic fix for. After the kernel command line
+# move: the GRUB superuser change regenerates grub.cfg.
+- name: Apply the site and image settings the profile can't
+  ansible.builtin.include_tasks: site.yml
 
 - name: Apply the DISA STIG profile (this takes several minutes)
   ansible.builtin.command: >-

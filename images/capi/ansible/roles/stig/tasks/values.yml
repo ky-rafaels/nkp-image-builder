@@ -1,0 +1,82 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Profile values the tailoring extends, and checks of the site settings.
+# Read from stdin, not a file: fapolicyd denies interpreters untrusted scripts.
+- name: Read the STIG profile's values for the variables the tailoring extends
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -I
+      - "-"
+      - "{{ stig_datastream }}"
+      - "{{ stig_profile }}"
+      - var_accounts_authorized_local_users_regex
+      - var_multiple_time_servers
+      - var_time_service_set_maxpoll
+    stdin: "{{ lookup('ansible.builtin.file', 'ssg-values.py') }}"
+  register: stig_ssg_values_out
+  changed_when: false
+
+- name: Work out the tailored values
+  ansible.builtin.set_fact:
+    stig_ssg_values: "{{ stig_ssg_values_out.stdout | from_json }}"
+    stig_time_servers: >-
+      {{ stig_ntp_servers if stig_ntp_servers | length > 0
+         else (stig_ssg_values_out.stdout | from_json).var_multiple_time_servers.split(',') | map('trim') | list }}
+    stig_all_authorized_local_users: >-
+      {{ stig_authorized_local_users + stig_extra_authorized_local_users
+         + ([{'name': stig_build_user, 'reason': 'Packer build account. The build deletes it after the final scan, before the image is captured.'}]
+            if stig_build_user | length > 0 else []) }}
+
+# V-258058: the profile's list is ^(root|bin|...)$; the tailoring extends it.
+- name: Check the profile's authorized local accounts can be extended (V-258058)
+  ansible.builtin.assert:
+    that: stig_ssg_values.var_accounts_authorized_local_users_regex is match('^\^\(.*\)\$$')
+    fail_msg: >-
+      var_accounts_authorized_local_users_regex is not of the form ^(a|b|...)$:
+      {{ stig_ssg_values.var_accounts_authorized_local_users_regex }}
+    quiet: true
+
+- name: Extend the authorized local accounts (V-258058)
+  ansible.builtin.set_fact:
+    stig_authorized_users_regex: >-
+      ^({{ stig_ssg_values.var_accounts_authorized_local_users_regex | regex_replace('^\^\((.*)\)\$$', '\1') }}|{{
+        stig_all_authorized_local_users | map(attribute='name') | map('regex_escape') | join('|') }})$
+
+- name: Check the DNS servers (V-257948)
+  ansible.builtin.fail:
+    msg: stig_dns_servers needs at least two servers (V-257948); got {{ stig_dns_servers | join(', ') }}.
+  when: stig_dns_servers | length == 1
+
+- name: Look up the GRUB superuser's name among local accounts (V-257789)
+  ansible.builtin.command: getent passwd {{ stig_grub_superuser }}
+  register: stig_grub_superuser_account
+  changed_when: false
+  failed_when: false
+  when: stig_grub_superuser | length > 0
+
+- name: Check the GRUB superuser's name (V-257789)
+  ansible.builtin.assert:
+    that:
+      # grub2_password (V-257787) matches the name with [a-zA-Z_]+.
+      - stig_grub_superuser is match('^[A-Za-z_]+$')
+      - stig_grub_superuser | lower not in ['root', 'admin', 'administrator']
+      - stig_grub_superuser_account.rc != 0
+    fail_msg: >-
+      stig_grub_superuser "{{ stig_grub_superuser }}" must be letters and
+      underscores, not root, admin or administrator, and not a local account's
+      name (V-257789).
+    quiet: true
+  when: stig_grub_superuser | length > 0

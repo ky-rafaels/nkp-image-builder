@@ -15,7 +15,8 @@
 
 # Last step of a DISA STIG build, after goss and just before shutdown:
 #   1. applies the rules held back while provisioning (the build user's
-#      NOPASSWD sudo rule, which goss needed),
+#      NOPASSWD sudo rule, which goss needed) and again those later build
+#      steps undo (dotfile permissions),
 #   2. checks the container runtime still works with fapolicyd enforcing,
 #   3. rebuilds the AIDE baseline from the finished image,
 #   4. scans the image and stores the results in the image as evidence,
@@ -44,7 +45,7 @@ oscap_eval() {
   fi
 }
 
-section "Applying rules deferred during provisioning: ${STIG_BUILD_PHASE_RULES}"
+section "Applying rules deferred during provisioning or undone since: ${STIG_BUILD_PHASE_RULES}"
 rule_args=()
 for r in ${STIG_BUILD_PHASE_RULES}; do rule_args+=(--rule "$r"); done
 if [[ ${#rule_args[@]} -gt 0 ]]; then

@@ -197,6 +197,19 @@ top of that:
    FIPS:STIG crypto policy. The non-RPM containerd/runc binaries are added to
    the fapolicyd trust database, and `/opt/cni/bin` is allowed so CNI plugins
    installed at runtime can run.
+
+   The profile has no fix for some rules, so the build sets them itself:
+
+   | Rule | Vuln ID | What the build does |
+   |---|---|---|
+   | GRUB superuser not root | V-257789 (CAT I) | Names the GRUB superuser `bootadmin` (`stig.grubSuperuser`) and regenerates `grub.cfg`. The GRUB password belongs to this user. |
+   | Chrony uses only `server` | V-257945 | Replaces the OS's `pool` line with `server … iburst maxpoll 16` for `stig.ntpServers`, or the profile's DoD source `0.us.pool.ntp.mil` if that's empty. Servers from DHCP are still used. |
+   | Authorized local accounts | V-258058 | Allows, besides the profile's RHEL 9 list, the accounts the image's packages create: `rpc`, `rpcuser` (nfs-utils), `fapolicyd`, `postfix`, `unbound` (libreswan) and `nvidia-persistenced` (GPU). Also allows the build user, which the build deletes after the final scan, and `stig.extraAuthorizedLocalUsers`. |
+   | SSH MACs | V-257991, V-270178 | The profile's crypto-policy rule (V-258241) gives SSH the four approved MACs in a different order than its MAC rules expect, so these two rules can never pass. The tailoring expects the order the policy gives. |
+   | Dotfile permissions | V-257889 | Applied again in the final step, because later build steps create new dotfiles. |
+   | sudo SELinux elevation | V-272496 | Adds `%wheel ALL=(ALL) TYPE=sysadm_t ROLE=sysadm_r ALL` (`stig.sudoAdminGroup`). **wheel members must be mapped to SELinux `staff_u`** (`semanage login -a -s staff_u USER`); sudo refuses the role to the default `unconfined_u`. The image has no wheel members. A user with its own rule later in `/etc/sudoers.d`, such as cloud-init's node user, isn't affected. |
+
+   The tailored values and allowed accounts are listed in `exceptions.md`.
    **Disk layout.** The STIG requires separate filesystems for `/var`,
    `/var/log`, `/var/log/audit`, `/var/tmp`, `/home` and `/tmp`. Cloud
    images have a single XFS root partition, and XFS can't shrink. So a STIG
@@ -237,8 +250,17 @@ Some findings need a site decision or a different disk image, so expect them
 in the report until you address them:
 
 * **GRUB password** (V-257787, CAT I). Add `STIG_GRUB_PASSWORD_HASH` (from
-  `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret.
+  `grub2-mkpasswd-pbkdf2`) to the Nutanix credentials Secret. To edit a boot
+  entry at the console, sign in as the GRUB superuser (`bootadmin` unless
+  you set `stig.grubSuperuser`) with that password.
 * **Remote log host** (V-258149). Set `stig.remoteSyslog`.
+* **Two DNS servers** (V-257948). `/etc/resolv.conf` comes from DHCP, so the
+  scan passes only if the build network's DHCP announces two DNS servers.
+  Set `stig.dnsServers` to make every node use your servers instead.
+* **SSSD certificate mapping** (V-258132). Needed only for smart card (PKI)
+  logins, which require the site's directory domain and mapping rules. If
+  your nodes have no PKI logins, ask your ISSM to accept an exception in
+  `stig.extraExceptions` (rule `sssd_enable_certmap`).
 * **Disk encryption** (V-257879, CAT I). If your ISSM accepts Nutanix
   Data-at-Rest Encryption, add it to `stig.extraExceptions` with that
   justification.

@@ -1,0 +1,122 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Settings the STIG profile has no generic fix for.
+- name: Set the GRUB superuser password (V-257787)
+  ansible.builtin.copy:
+    dest: /boot/grub2/user.cfg
+    content: "GRUB2_PASSWORD={{ stig_grub_password_hash }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: stig_grub_password_hash | length > 0
+
+- name: Forward logs to the remote log host (V-258149)
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/90-remote-loghost.conf
+    content: |
+      # DISA STIG V-258149: off-load audit and system logs.
+      *.* @@{{ stig_remote_syslog }}
+    mode: "0644"
+  when: stig_remote_syslog | length > 0
+
+# V-257945. The OS's "pool" line keeps the profile's own fix from adding
+# servers, and chronyd_server_directive fails on any pool line.
+- name: Remove the OS's time sources (V-257945)
+  ansible.builtin.lineinfile:
+    path: /etc/chrony.conf
+    regexp: '^\s*(pool|server)\s'
+    state: absent
+
+- name: Set the time sources with server directives (V-257945)
+  ansible.builtin.blockinfile:
+    path: /etc/chrony.conf
+    insertbefore: BOF
+    marker: "# {mark} DISA STIG time sources (V-257945), set by image-builder"
+    block: |
+      {% for s in stig_time_servers %}
+      server {{ s }} iburst maxpoll {{ stig_ssg_values.var_time_service_set_maxpoll }}
+      {% endfor %}
+
+- name: Use the site's DNS servers on every node (V-257948)
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/90-image-builder-stig-dns.conf
+    content: |
+      # DISA STIG V-257948: two or more DNS servers, in place of DHCP's.
+      [global-dns-domain-*]
+      servers={{ stig_dns_servers | join(',') }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: stig_dns_servers | length > 0
+
+# NetworkManager rewrites resolv.conf from the global DNS servers on reload.
+- name: Apply the DNS servers (V-257948)
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+  when: stig_dns_servers | length > 0
+
+- name: Check resolv.conf lists the DNS servers (V-257948)
+  ansible.builtin.slurp:
+    src: /etc/resolv.conf
+  register: stig_resolv_conf
+  until: >-
+    stig_dns_servers | difference(stig_resolv_conf.content | b64decode
+      | regex_findall('(?m)^\s*nameserver\s+(\S+)')) | length == 0
+  retries: 10
+  delay: 3
+  when: stig_dns_servers | length > 0
+
+- name: Elevate the SELinux context of sudo administrators (V-272496)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/10-stig-selinux-elevation
+    content: |
+      # DISA STIG V-272496: members of {{ stig_sudo_admin_group }} sudo as sysadm_t. They must
+      # be SELinux staff_u users (semanage login -a -s staff_u USER): sudo
+      # refuses the sysadm_r role to unconfined_u, the default.
+      %{{ stig_sudo_admin_group }} ALL=(ALL) TYPE=sysadm_t ROLE=sysadm_r ALL
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  when: stig_sudo_admin_group | length > 0
+
+# V-257789 (CAT I), DISA's fix: rename the superuser in /etc/grub.d/01_users
+# (an RPM config file) and regenerate grub.cfg, whose copy the scan checks.
+- name: Give the GRUB superuser a name other than root (V-257789)
+  ansible.builtin.replace:
+    path: /etc/grub.d/01_users
+    regexp: "{{ item.regexp }}"
+    replace: "{{ item.replace }}"
+  loop:
+    - regexp: '^(\s*set superusers=)"[^"]*"\s*$'
+      replace: '\1"{{ stig_grub_superuser }}"'
+    - regexp: '^(\s*password_pbkdf2\s+)\S+(\s)'
+      replace: '\g<1>{{ stig_grub_superuser }}\g<2>'
+  when: stig_grub_superuser | length > 0
+
+- name: Check 01_users names the GRUB superuser (V-257789)
+  ansible.builtin.command: grep -c '^[[:space:]]*set superusers="{{ stig_grub_superuser }}"$' /etc/grub.d/01_users
+  changed_when: false
+  when: stig_grub_superuser | length > 0
+
+# BLS entries keep their own options: EL9's grub2-mkconfig rewrites them only
+# with --update-bls-cmdline (and older ones from GRUB_CMDLINE_LINUX, which
+# main.yml has filled by now).
+- name: Regenerate grub.cfg with the GRUB superuser (V-257789)
+  ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
+  when: stig_grub_superuser | length > 0
+  changed_when: true

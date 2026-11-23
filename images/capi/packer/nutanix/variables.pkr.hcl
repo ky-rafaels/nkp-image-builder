@@ -744,6 +744,31 @@ variable "stig_grub_password_hash" {
   default     = env("STIG_GRUB_PASSWORD_HASH")
   sensitive   = true
 }
+variable "stig_grub_superuser" {
+  type        = string
+  description = "Name of the GRUB superuser, which the GRUB password belongs to (V-257789). Letters and underscores; not root, admin, administrator or a local account. Empty keeps root, an open CAT I finding."
+  default     = "bootadmin"
+}
+variable "stig_ntp_servers" {
+  type        = string
+  description = "Comma-separated time sources for chrony's server directive (V-257945). Empty uses the STIG profile's DoD source, 0.us.pool.ntp.mil."
+  default     = ""
+}
+variable "stig_dns_servers" {
+  type        = string
+  description = "Comma-separated DNS servers (two or more) every node uses in place of DHCP's (V-257948). Empty leaves DNS to DHCP."
+  default     = ""
+}
+variable "stig_sudo_admin_group" {
+  type        = string
+  description = "Group whose members sudo into SELinux sysadm_t (V-272496). They must be SELinux staff_u users. Empty leaves it an open finding."
+  default     = "wheel"
+}
+variable "stig_extra_authorized_local_users" {
+  type        = string
+  description = "JSON list of extra local accounts allowed by V-258058, such as the node SSH user: [{\"name\": \"...\", \"reason\": \"...\"}]."
+  default     = "[]"
+}
 
 variable "stig_partition_sizes" {
   type        = string

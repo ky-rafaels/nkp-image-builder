@@ -79,6 +79,13 @@ stig_extra_exceptions: []
 stig_build_phase_deselect:
   - sudo_remove_nopasswd
 
+# Remediated while provisioning and again by the final build step, because
+# later build steps undo them: file_permission_user_init_files_root's fix
+# makes every dotfile in root's and the build user's home 0740 or less, and
+# later steps create new ones (Ansible, goss, the GPU role).
+stig_final_reapply:
+  - file_permission_user_init_files_root
+
 # Deselected while provisioning and NOT re-applied by the deferred step,
 # because packer/files/stig/finalize-stig.sh does the work itself, once,
 # after the image is complete: aide_build_database's fix runs `aide --init`
@@ -93,6 +100,60 @@ stig_remote_syslog: ""
 # V-257787 (CAT I): GRUB superuser password as a grub2-mkpasswd-pbkdf2 hash
 # (grub.pbkdf2.sha512.…). Empty leaves it a finding.
 stig_grub_password_hash: ""
+# V-257789 (CAT I): the GRUB superuser's name, which the password above
+# belongs to (type both at the GRUB prompt to edit a boot entry). Letters and
+# underscores; not root, admin, administrator or a local account's name.
+stig_grub_superuser: bootadmin
+
+# V-257945: time sources, written as "server <name> iburst maxpoll 16" in
+# place of the OS's "pool" line. Empty uses the STIG profile's own value
+# (var_multiple_time_servers, the DoD source 0.us.pool.ntp.mil). Servers
+# DHCP announces are still used (chrony's sourcedir).
+stig_ntp_servers: []
+
+# V-257948: two or more DNS servers. The image's resolv.conf comes from DHCP
+# at boot, so the image passes only if the build network's DHCP announces
+# two. Set to use these servers on every node instead (NetworkManager global
+# DNS, replacing DHCP's); empty leaves it to the network.
+stig_dns_servers: []
+
+# V-272496: the sudoers group whose members sudo into the SELinux sysadm_t
+# domain ("%wheel ALL=(ALL) TYPE=sysadm_t ROLE=sysadm_r ALL"). Members must be
+# SELinux staff_u users (semanage login -a -s staff_u <user>): sudo refuses
+# the sysadm_r role to the default unconfined_u. Accounts with their own
+# sudoers rule later in sudoers.d (the node user cloud-init creates) are not
+# affected. Empty leaves it a finding.
+stig_sudo_admin_group: wheel
+
+# V-258058: local accounts allowed besides the STIG profile's RHEL 9 list
+# (var_accounts_authorized_local_users_regex), each created by a package the
+# image needs. Listed in exceptions.md.
+stig_authorized_local_users:
+  - name: rpc
+    reason: rpcbind, which nfs-utils requires (see V-257828).
+  - name: rpcuser
+    reason: nfs-utils (see V-257828).
+  - name: fapolicyd
+    reason: fapolicyd, which the STIG requires (V-258089).
+  - name: postfix
+    reason: postfix, which the STIG requires (V-272488).
+  - name: unbound
+    reason: unbound-libs, which libreswan requires (V-257954).
+  - name: nvidia-persistenced
+    reason: NVIDIA's persistence daemon, on GPU images only.
+# Site accounts, e.g. the node SSH user the cluster's cloud-init creates:
+# [{name: ..., reason: ...}]
+stig_extra_authorized_local_users: []
+# Packer's SSH user. It exists until the shutdown command deletes it, after
+# the final scan, so the scan allows it.
+stig_build_user: ""
+
+# V-257991, V-270178: the SSH MACs the scan expects, in the order the
+# FIPS:STIG crypto policy writes them. The profile's own value lists the same
+# four MACs in another order, and its fips_custom_stig_sub_policy rule
+# (V-258241) writes the STIG module that sets this order, so the two can't
+# both pass. DISA's check compares the set of MACs, not their order.
+stig_sshd_approved_macs: hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
 
 # Non-RPM executables (the containerd/runc bundle, crictl) are added to the
 # fapolicyd trust database so the STIG's deny-by-default policy lets them run.

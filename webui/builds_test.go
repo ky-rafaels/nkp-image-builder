@@ -339,6 +339,31 @@ func TestSTIG(t *testing.T) {
 	if err := json.Unmarshal([]byte(v["stig_extra_exceptions"]), &ex); err != nil || len(ex) != 1 || ex[0].Rule != "encrypt_partitions" {
 		t.Errorf("exceptions = %q (%v)", v["stig_extra_exceptions"], err)
 	}
+	// Unset site settings leave the build's defaults.
+	for _, k := range []string{"stig_grub_superuser", "stig_ntp_servers", "stig_dns_servers", "stig_sudo_admin_group", "stig_extra_authorized_local_users"} {
+		if _, ok := v[k]; ok {
+			t.Errorf("%s set without a site value: %q", k, v[k])
+		}
+	}
+
+	none := ""
+	cfg.STIG.GrubSuperuser = "grubops"
+	cfg.STIG.NTPServers = []string{"ntp1.example.mil", "ntp2.example.mil"}
+	cfg.STIG.DNSServers = []string{"10.0.0.53", "10.0.1.53"}
+	cfg.STIG.SudoAdminGroup = &none
+	cfg.STIG.ExtraAuthorizedLocalUsers = []STIGLocalUser{{Name: "nodeadmin", Reason: "node SSH user"}}
+	v = r.packerVars(cfg)
+	for k, want := range map[string]string{
+		"stig_grub_superuser":               "grubops",
+		"stig_ntp_servers":                  "ntp1.example.mil,ntp2.example.mil",
+		"stig_dns_servers":                  "10.0.0.53,10.0.1.53",
+		"stig_sudo_admin_group":             "",
+		"stig_extra_authorized_local_users": `[{"name":"nodeadmin","reason":"node SSH user"}]`,
+	} {
+		if got, ok := v[k]; !ok || got != want {
+			t.Errorf("%s = %q (set %v), want %q", k, got, ok, want)
+		}
+	}
 
 	for name, c := range map[string]struct {
 		req   BuildRequest

@@ -14,6 +14,27 @@ results.xml / report.html in this directory for the scan of the final image.
 | {{ e.rule }} | {{ e.vuln_id | default('') }} | {{ e.reason | default('') | replace('\n', ' ') | trim }} |
 {% endfor %}
 
+## Tailored values
+
+The tailoring also changes these profile values. Their rules are still
+checked.
+
+| Value | Rule (Vuln ID) | Set to | Why |
+|---|---|---|---|
+| var_accounts_authorized_local_users_regex | accounts_authorized_local_users (V-258058) | `{{ stig_authorized_users_regex | replace('|', '\\|') }}` | The profile's RHEL 9 list plus the accounts below. |
+| var_multiple_time_servers | chronyd_specify_remote_server (V-257945) | `{{ stig_time_servers | join(',') }}` | {{ 'Site time sources.' if stig_ntp_servers | length > 0 else "The profile's own value." }} /etc/chrony.conf uses these with the server directive in place of the OS's pool line. |
+| sshd_approved_macs | harden_sshd_macs_openssh_conf_crypto_policy (V-270178), harden_sshd_macs_opensshserver_conf_crypto_policy (V-257991) | `{{ stig_sshd_approved_macs }}` | The order the FIPS:STIG crypto policy writes the same four MACs in. The profile's fips_custom_stig_sub_policy rule (V-258241) writes the STIG policy module that sets this order, and the profile's own value lists them in another, so both rules could not pass. DISA's check compares the set of MACs, not their order. |
+
+## Authorized local accounts (V-258058)
+
+Allowed besides the profile's RHEL 9 list:
+
+| Account | Why |
+|---|---|
+{% for u in stig_all_authorized_local_users %}
+| {{ u.name }} | {{ u.reason | default('') | replace('\n', ' ') | trim }} |
+{% endfor %}
+
 ## Runtime notes for the assessor
 
 * fapolicyd runs deny-by-default. Non-RPM runtime binaries are in
@@ -26,5 +47,19 @@ results.xml / report.html in this directory for the scan of the final image.
   on an untrusted binary is still denied.
 * CNI plugins may change networking sysctls (e.g. per-interface rp_filter) on
   a running node.
+{% if stig_grub_superuser | length > 0 %}
+* The GRUB superuser is `{{ stig_grub_superuser }}`; with its password set
+  (/boot/grub2/user.cfg), editing a boot entry asks for both.
+{% endif %}
+{% if stig_sudo_admin_group | length > 0 %}
+* Members of `{{ stig_sudo_admin_group }}` sudo into SELinux sysadm_t
+  (/etc/sudoers.d/10-stig-selinux-elevation) and must be mapped to the
+  SELinux user staff_u (`semanage login -a -s staff_u USER`); sudo refuses
+  the sysadm_r role to unconfined_u users.
+{% endif %}
+{% if stig_dns_servers | length == 0 %}
+* /etc/resolv.conf comes from DHCP. V-257948 (two or more DNS servers) is met
+  on networks whose DHCP announces at least two.
+{% endif %}
 * The Kubernetes STIG covers the cluster (API server, kubelet configuration,
   etc.). It is applied by the platform at cluster creation, not by this image.

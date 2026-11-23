@@ -111,6 +111,14 @@ locals {
       stig_extra_exceptions   = jsondecode(var.stig_extra_exceptions)
       stig_remote_syslog      = var.stig_remote_syslog
       stig_grub_password_hash = var.stig_grub_password_hash
+      stig_grub_superuser     = var.stig_grub_superuser
+      stig_ntp_servers        = compact([for s in split(",", var.stig_ntp_servers) : trimspace(s)])
+      stig_dns_servers        = compact([for s in split(",", var.stig_dns_servers) : trimspace(s)])
+      stig_sudo_admin_group   = var.stig_sudo_admin_group
+      # The build user exists until shutdown_command deletes it, after the
+      # final scan.
+      stig_build_user                   = var.ssh_username
+      stig_extra_authorized_local_users = jsondecode(var.stig_extra_authorized_local_users)
       # goss runs after the STIG role has fapolicyd enforcing.
       stig_fapolicyd_build_allow_paths = [local.goss_download_path]
       gpu_enabled                      = local.gpu_enabled

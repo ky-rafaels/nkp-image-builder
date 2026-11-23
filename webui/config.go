@@ -217,6 +217,24 @@ type STIGConfig struct {
 	ExtraExceptions []STIGException `json:"extraExceptions"`
 	// host:port of the remote log host (V-258149).
 	RemoteSyslog string `json:"remoteSyslog"`
+	// Name of the GRUB superuser (V-257789). Empty: the build's default.
+	GrubSuperuser string `json:"grubSuperuser"`
+	// Time sources for chrony's server directive (V-257945). Empty: the
+	// STIG profile's DoD source.
+	NTPServers []string `json:"ntpServers"`
+	// Two or more DNS servers every node uses in place of DHCP's (V-257948).
+	DNSServers []string `json:"dnsServers"`
+	// Group whose members sudo into SELinux sysadm_t (V-272496). Unset: the
+	// build's default (wheel); "" leaves it an open finding.
+	SudoAdminGroup *string `json:"sudoAdminGroup"`
+	// Local accounts V-258058 allows besides the built-in ones, such as the
+	// node SSH user.
+	ExtraAuthorizedLocalUsers []STIGLocalUser `json:"extraAuthorizedLocalUsers"`
+}
+
+type STIGLocalUser struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 type STIGException struct {
