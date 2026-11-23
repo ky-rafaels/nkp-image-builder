@@ -1,0 +1,74 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Air-gapped build (roles/airgap): pick NKP's containerd bundle for this OS
+# from the artifacts directory (NKP's image-artifacts layout), named
+# containerd-<version>-d2iq.1-<distro>-<distro version>-x86_64[_fips].tar.gz.
+# Ubuntu needs its own release's bundle (runc links its glibc). Any EL9
+# bundle runs on any EL9 minor, so Rocky and RHEL prefer their own version,
+# then their newest same-major bundle, and Rocky falls back to RHEL's (NKP
+# has no Rocky FIPS bundles).
+---
+- name: Work out which containerd bundle fits
+  ansible.builtin.set_fact:
+    # The FIPS bundle's version on FIPS builds.
+    containerd_airgap_version: "{{ containerd_version }}"
+    containerd_airgap_suffix: "{{ '_fips' if fips_enabled | bool else '' }}"
+    containerd_airgap_distros: >-
+      {{ {'Rocky': ['rocky', 'rhel'], 'RedHat': ['rhel'], 'Ubuntu': ['ubuntu']}.get(ansible_facts['distribution'], []) }}
+    containerd_airgap_os_version_re: >-
+      {{ (ansible_facts['distribution_version'] | regex_escape) if ansible_facts['os_family'] == 'Debian'
+         else ansible_facts['distribution_major_version'] ~ '(\.[0-9]+)*' }}
+
+- name: Find the containerd bundles for containerd {{ containerd_airgap_version }}
+  ansible.builtin.find:
+    paths: "{{ airgap_artifacts_dir }}"
+    patterns: >-
+      ^containerd-{{ containerd_airgap_version | regex_escape }}-d2iq\.1-.*-x86_64{{ containerd_airgap_suffix }}\.tar\.gz$
+    use_regex: true
+    file_type: file
+  register: containerd_airgap_found
+  delegate_to: localhost
+  become: false
+
+- name: Pick the containerd bundle
+  ansible.builtin.set_fact:
+    containerd_bundle_file: >-
+      {%- set names = containerd_airgap_found.files | map(attribute='path') | map('basename') | list -%}
+      {%- set ns = namespace(pick='') -%}
+      {%- for d in containerd_airgap_distros if not ns.pick -%}
+        {%- set exact = 'containerd-' ~ containerd_airgap_version ~ '-d2iq.1-' ~ d ~ '-' ~ ansible_facts['distribution_version']
+              ~ '-x86_64' ~ containerd_airgap_suffix ~ '.tar.gz' -%}
+        {%- set same = names | select('match', '^containerd-' ~ (containerd_airgap_version | regex_escape) ~ '-d2iq\.1-' ~ d ~ '-'
+              ~ containerd_airgap_os_version_re ~ '-x86_64' ~ containerd_airgap_suffix ~ '\.tar\.gz$') | list -%}
+        {%- if exact in names -%}{%- set ns.pick = exact -%}
+        {%- elif same | length > 0 -%}{%- set ns.pick = (same | community.general.version_sort)[-1] -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{- (airgap_artifacts_dir ~ '/' ~ ns.pick) if ns.pick else '' -}}
+
+- name: Fail if no containerd bundle fits
+  ansible.builtin.fail:
+    msg: >-
+      No containerd {{ containerd_airgap_version }} bundle for {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} in {{ airgap_artifacts_dir }}: add
+      containerd-{{ containerd_airgap_version }}-d2iq.1-{{ containerd_airgap_distros | first | default('<distro>') }}-{{
+      ansible_facts['distribution_version'] }}-x86_64{{ containerd_airgap_suffix }}.tar.gz from the image-artifacts
+      directory of the NKP release that pairs this Kubernetes version with containerd {{ containerd_airgap_version }}.
+      Found: {{ containerd_airgap_found.files | map(attribute='path') | map('basename') | join(', ') or 'none' }}.
+  when: containerd_bundle_file | length == 0
+
+- name: Report the containerd bundle
+  ansible.builtin.debug:
+    msg: "Installing containerd from {{ containerd_bundle_file | basename }}"

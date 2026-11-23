@@ -95,7 +95,7 @@
             <div class="segmented" role="radiogroup" aria-label="Source image">
               <label id="source-mode-default"><input type="radio" name="sourceMode" value="default" checked> Repo default</label>
               <label><input type="radio" name="sourceMode" value="prism"> Prism Central image</label>
-              <label><input type="radio" name="sourceMode" value="url"> Download URL</label>
+              <label id="source-mode-url"><input type="radio" name="sourceMode" value="url"> Download URL</label>
             </div>
             <div class="source-input" data-source-mode="prism">
               <input name="sourceImage" placeholder="Image name or UUID, e.g. rhel-9.6-kvm" autocomplete="off" spellcheck="false" aria-label="Prism Central image name or UUID">
@@ -139,6 +139,23 @@
             <small class="hint" id="gpu-status"></small>
             <small class="field-error" data-error-for="gpu"></small>
           </div>
+        </fieldset>
+
+        <fieldset class="hidden" id="airgap-section">
+          <legend>Network</legend>
+          <div class="segmented" role="radiogroup" aria-label="Network">
+            <label><input type="radio" name="networkMode" value="online" checked> Online</label>
+            <label><input type="radio" name="networkMode" value="harvest"> Online, save OS packages</label>
+            <label><input type="radio" name="networkMode" value="airgap"> Air-gapped</label>
+          </div>
+          <small class="hint" id="network-hint"></small>
+          <label class="field hidden" id="os-bundles-field">
+            <span>OS package bundles</span>
+            <select name="osPackageBundles" multiple size="4" aria-describedby="os-bundles-hint"></select>
+            <small class="hint" id="os-bundles-hint">Leave none selected to use the bundle named for this build's Kubernetes version, OS version and options (for example <code>1.36.2_rocky_9.8_x86_64_stig.tar.gz</code>).</small>
+            <small class="field-error" data-error-for="osPackageBundles"></small>
+          </label>
+          <p class="field-error" data-error-for="airgap"></p>
         </fieldset>
 
         <details class="advanced" id="credentials-section">
@@ -228,6 +245,7 @@
       </form>
     </section>
 
+    <div class="side">
     <section class="panel builds" aria-labelledby="builds-title">
       <div class="panel-head">
         <h2 id="builds-title">Builds</h2>
@@ -243,6 +261,29 @@
         <p class="empty hidden" id="builds-empty">No builds yet. Fill in the form to start one.</p>
       </div>
     </section>
+
+    <section class="panel hidden" id="artifacts-panel" aria-labelledby="artifacts-title">
+      <div class="panel-head">
+        <h2 id="artifacts-title">Air-gapped artifacts</h2>
+        <div class="head-actions">
+          <label class="button ghost">Upload files<input type="file" id="artifact-files" multiple class="visually-hidden"></label>
+          <label class="button ghost">Upload NKP folder<input type="file" id="artifact-folder" webkitdirectory class="visually-hidden"></label>
+        </div>
+      </div>
+      <p class="hint">What air-gapped builds install from. From the NKP air-gapped bundle, upload its <code>image-artifacts</code> folder (the containerd bundles and <code>images/</code>); picking the whole bundle folder uploads just that part. OS package bundles come from a build with <em>Online, save OS packages</em> of the same OS, base image and options, or from <code>nkp create package-bundle</code>.</p>
+      <ul class="uploads" id="uploads"></ul>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Artifact</th><th>Kind</th><th>Size</th><th>sha256</th><th><span class="visually-hidden">Actions</span></th></tr>
+          </thead>
+          <tbody id="artifacts-body" class="static"></tbody>
+        </table>
+        <p class="empty hidden" id="artifacts-empty">No artifacts yet.</p>
+      </div>
+      <p class="hint" id="artifacts-free"></p>
+    </section>
+    </div>
   </main>
 
   <dialog id="detail" aria-labelledby="detail-title">

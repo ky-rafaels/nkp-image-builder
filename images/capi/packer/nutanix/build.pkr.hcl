@@ -20,6 +20,17 @@ build {
     script          = "./packer/files/flatcar/scripts/bootstrap-flatcar.sh"
   }
 
+  # Air-gapped and harvesting builds, before the FIPS and STIG steps install
+  # their first packages: make the uploaded OS package bundles the only
+  # repos, or keep every package downloaded (ansible/airgap-prepare.yml). A
+  # no-op otherwise.
+  provisioner "ansible" {
+    ansible_env_vars = local.ansible_env_vars
+    extra_arguments  = local.ansible_extra_arguments
+    playbook_file    = "./ansible/airgap-prepare.yml"
+    user             = "builder"
+  }
+
   # FIPS: switch the VM to FIPS mode and reboot into it before provisioning,
   # so everything below (including goss) runs on the FIPS kernel. All three
   # steps are no-ops when fips_enabled is false.
@@ -113,6 +124,7 @@ build {
     format_options = var.goss_format_options
     goss_file      = var.goss_entry_file
     inspect        = var.goss_inspect_mode
+    skip_install   = local.goss_local_binary != "" # node.yml uploaded it from the build pod
     tests          = [var.goss_tests_dir]
     url            = var.goss_url
     use_sudo       = true

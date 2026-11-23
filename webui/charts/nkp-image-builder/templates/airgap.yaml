@@ -1,0 +1,34 @@
+{{- if .Values.airgap.enabled }}
+{{- if not .Values.airgap.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nkpib.artifactsClaimName" . }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+  annotations:
+    # Uploaded artifacts survive uninstalling the chart.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.airgap.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.airgap.persistence.size | quote }}
+---
+{{- end }}
+{{- /* The token build pods use the artifact store with. Kept across upgrades. */}}
+{{- $name := include "nkpib.artifactsTokenSecretName" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nkpib.labels" . | nindent 4 }}
+type: Opaque
+data:
+  token: {{ if and $existing $existing.data $existing.data.token }}{{ $existing.data.token }}{{ else }}{{ randAlphaNum 48 | b64enc }}{{ end }}
+{{- end }}

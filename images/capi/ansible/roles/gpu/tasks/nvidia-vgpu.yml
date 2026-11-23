@@ -53,7 +53,17 @@
     lock_timeout: 60
   when: ansible_facts['os_family'] == 'RedHat'
 
+# Air-gapped builds (roles/airgap) take it from the artifacts directory in the
+# build pod, by the URL's file name.
+- name: Upload the vGPU guest driver from the air-gapped artifacts
+  ansible.builtin.copy:
+    src: "{{ airgap_artifacts_dir }}/{{ gpu_nvidia_vgpu_driver_url | urlsplit('path') | basename }}"
+    dest: /var/tmp/nvidia-vgpu-guest-driver.{{ gpu_vgpu_pkg }}
+    mode: "0644"
+  when: (airgap_artifacts_dir | default('')) | length > 0
+
 - name: Download the vGPU guest driver
+  when: (airgap_artifacts_dir | default('')) | length == 0
   ansible.builtin.get_url:
     url: "{{ gpu_nvidia_vgpu_driver_url }}"
     dest: /var/tmp/nvidia-vgpu-guest-driver.{{ gpu_vgpu_pkg }}

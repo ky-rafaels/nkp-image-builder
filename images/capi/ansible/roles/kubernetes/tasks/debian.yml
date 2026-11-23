@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ---
+# Air-gapped builds install Kubernetes from the OS package bundle's repo.
 - name: Add the Kubernetes repo
+  when: (airgap_artifacts_dir | default('')) | length == 0
   ansible.builtin.deb822_repository:
     name: kubernetes
     types:
@@ -66,11 +68,16 @@
     name: "{{ packages }}"
     allow_downgrade: true
   vars:
-    packages:
-      - kubelet={{ kubernetes_deb_package_version }}
-      - kubeadm={{ kubernetes_deb_package_version }}
-      - kubectl={{ kubernetes_deb_package_version }}
-      - kubernetes-cni{{ '=' + kubernetes_cni_deb_version if kubernetes_cni_deb_version else '' }}
+    # cri-tools when crictl comes from the package repo (air-gapped and
+    # harvesting builds); its revisions vary (1.36.0-1.1), so match the
+    # version's prefix.
+    packages: >-
+      {{ [
+        'kubelet=' + kubernetes_deb_package_version,
+        'kubeadm=' + kubernetes_deb_package_version,
+        'kubectl=' + kubernetes_deb_package_version,
+        'kubernetes-cni' + ('=' + kubernetes_cni_deb_version if kubernetes_cni_deb_version else ''),
+      ] + (['cri-tools=' + crictl_version + '*'] if kubernetes_crictl_from_package | bool else []) }}
   register: apt_lock_status
   until: apt_lock_status is not failed
   retries: 5

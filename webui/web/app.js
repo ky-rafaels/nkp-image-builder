@@ -13,6 +13,9 @@ const state = {
   gpuTimer: null,
   // The user typed a vCPU or memory size, so the form stops picking one.
   sizeEdited: false,
+  // The air-gapped artifact store (GET /api/artifacts), when enabled.
+  artifacts: null,
+  uploading: false,
 };
 
 async function api(path, opts = {}) {
@@ -62,6 +65,14 @@ function fmtDuration(b) {
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
 }
 
+function fmtBytes(n) {
+  if (n == null) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i && n < 10 ? 1 : 0)} ${units[i]}`;
+}
+
 function osLabel(id) {
   return state.config?.catalog.operatingSystems.find((o) => o.id === id)?.label || id;
 }
@@ -95,6 +106,8 @@ async function loadConfig() {
   $("#fips-option").classList.toggle("hidden", !cfg.fips.enabled);
   $("#stig-option").classList.toggle("hidden", !cfg.stig.enabled);
   $("#gpu-section").classList.toggle("hidden", !cfg.gpu.enabled);
+  $("#airgap-section").classList.toggle("hidden", !cfg.airgap?.enabled);
+  $("#artifacts-panel").classList.toggle("hidden", !cfg.airgap?.enabled);
 
   const f = $("#build-form");
   const d = cfg.defaults;
@@ -182,10 +195,13 @@ function onFormChange() {
     .replaceAll("{stig}", stigSelected() ? "-stig" : "")
     .replaceAll("{gpu}", gpuSelected() ? (selectedGPU()?.mode === "vgpu" ? "-vgpu" : "-gpu") : "")
     .replaceAll("{timestamp}", "<timestamp>");
-  $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL);
+  // Air-gapped builds boot from an image already in Prism Central.
+  const airgap = networkMode() === "airgap";
+  $("#source-image-required").classList.toggle("hidden", !os.requiresImageURL && !airgap);
   // OSes without a usable default image must pick a Prism image or a URL.
-  $("#source-mode-default").classList.toggle("hidden", os.requiresImageURL);
-  if (os.requiresImageURL && sourceMode() === "default") {
+  $("#source-mode-default").classList.toggle("hidden", os.requiresImageURL || airgap);
+  $("#source-mode-url").classList.toggle("hidden", airgap);
+  if ((os.requiresImageURL && sourceMode() === "default") || (airgap && sourceMode() !== "prism")) {
     f.querySelector("input[name=sourceMode][value=prism]").checked = true;
   }
   $("#source-image-hint").textContent = os.defaultImageURL
@@ -195,6 +211,163 @@ function onFormChange() {
   $$("[data-source-mode]").forEach((n) => n.classList.toggle("hidden", n.dataset.sourceMode !== mode));
   $("#rhsm-fields").classList.toggle("hidden", !os.requiresRHSM);
   onGPUFormChange(os);
+  onNetworkChange(os);
+}
+
+/* ---------- air-gapped builds ---------- */
+
+function networkMode() {
+  if (!state.config?.airgap?.enabled) return "online";
+  return $("#build-form").querySelector("input[name=networkMode]:checked")?.value || "online";
+}
+
+function onNetworkChange(os) {
+  if (!state.config.airgap?.enabled) return;
+  const mode = networkMode();
+  $("#os-bundles-field").classList.toggle("hidden", mode !== "airgap");
+  const k8s = $("#build-form").kubernetesVersion.value.trim().replace(/^v/, "") || "…";
+  $("#network-hint").textContent = {
+    online: "The build VM downloads packages, containerd and images from the internet (or the proxy below).",
+    harvest: `An online build that also saves every OS package it installs to the artifact store, as the OS package bundle for air-gapped builds of ${os.label}, Kubernetes ${k8s} and these options, from the same source image.`,
+    airgap: "Installs only from the artifact store: an OS package bundle, NKP's containerd bundle and image bundle for this Kubernetes version. The build needs nothing but Prism Central, and boots from an image already there: the one the OS package bundle was saved from.",
+  }[mode];
+  renderBundleChoices();
+}
+
+function renderBundleChoices() {
+  const sel = $("#build-form").osPackageBundles;
+  const keep = new Set([...sel.selectedOptions].map((o) => o.value));
+  const bundles = (state.artifacts?.artifacts || []).filter((a) => a.kind === "os-packages");
+  const key = JSON.stringify(bundles.map((a) => a.name));
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  sel.replaceChildren(...bundles.map((a) =>
+    el("option", { value: a.name, selected: keep.has(a.name) }, `${a.name} (${fmtBytes(a.size)})`)));
+  sel.disabled = bundles.length === 0;
+}
+
+async function refreshArtifacts() {
+  if (!state.config?.airgap?.enabled) return;
+  try {
+    state.artifacts = await api("/api/artifacts");
+  } catch (e) {
+    $("#artifacts-free").textContent = `Couldn't list artifacts: ${e.message}`;
+    return;
+  }
+  const kinds = { "os-packages": "OS packages", containerd: "containerd", images: "images", other: "other" };
+  const list = state.artifacts.artifacts;
+  $("#artifacts-body").replaceChildren(...list.map((a) =>
+    el("tr", {},
+      el("td", { class: "mono" }, a.name),
+      el("td", {}, el("span", { class: "tag" }, kinds[a.kind] || a.kind)),
+      el("td", {}, fmtBytes(a.size)),
+      el("td", { class: "mono", title: a.sha256 || "" }, a.sha256 ? a.sha256.slice(0, 12) : "—"),
+      el("td", { class: "actions-cell" },
+        // To carry a harvested bundle to an air-gapped site.
+        el("a", { class: "button ghost", href: `/api/artifacts/${encodeArtifactName(a.name)}`, download: a.name.split("/").pop() }, "Download"),
+        " ",
+        el("button", { type: "button", class: "danger", onclick: () => deleteArtifact(a.name) }, "Delete")),
+    )));
+  $("#artifacts-empty").classList.toggle("hidden", list.length > 0);
+  $("#artifacts-free").textContent = `${fmtBytes(state.artifacts.freeBytes)} free in the artifact store.`;
+  renderBundleChoices();
+}
+
+async function deleteArtifact(name) {
+  if (!confirm(`Delete ${name} from the artifact store? Air-gapped builds that need it will fail until it is uploaded again.`)) return;
+  try {
+    await api(`/api/artifacts/${encodeArtifactName(name)}`, { method: "DELETE" });
+  } catch (e) {
+    alert(e.message);
+  }
+  refreshArtifacts();
+}
+
+const reArtifactName = /^(images\/)?[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$/;
+
+function encodeArtifactName(name) {
+  return name.split("/").map(encodeURIComponent).join("/");
+}
+
+// Where an uploaded file goes in the store. From a folder, only the NKP
+// bundle's image-artifacts part is taken, keeping its images/ directory;
+// loose image bundles go to images/ too.
+function artifactNameFor(file, fromFolder) {
+  let name = file.name;
+  if (fromFolder) {
+    const rel = file.webkitRelativePath || file.name;
+    const i = rel.lastIndexOf("image-artifacts/");
+    if (i < 0) return null;
+    name = rel.slice(i + "image-artifacts/".length);
+  } else if (/^kubernetes-images-.*\.tar(\.gz)?$/.test(name)) {
+    name = `images/${name}`;
+  }
+  if (name.split("/").some((p) => p.startsWith("."))) return null;
+  return reArtifactName.test(name) ? name : null;
+}
+
+function uploadOne(file, name, row) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", `/api/artifacts/${encodeArtifactName(name)}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      row.bar.value = e.loaded / e.total;
+      row.status.textContent = `${fmtBytes(e.loaded)} of ${fmtBytes(e.total)}`;
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let msg = xhr.statusText || `HTTP ${xhr.status}`;
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* not JSON */ }
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(file);
+  });
+}
+
+async function uploadArtifacts(files, fromFolder) {
+  const todo = [];
+  const skipped = [];
+  for (const file of files) {
+    const name = artifactNameFor(file, fromFolder);
+    if (name) todo.push({ file, name });
+    else if (!fromFolder) skipped.push(file.name);
+  }
+  if (skipped.length) alert(`Not uploaded (names may only use letters, digits, '.', '_', '+' and '-'): ${skipped.join(", ")}`);
+  if (!todo.length) {
+    if (fromFolder) alert("That folder has no image-artifacts directory from an NKP air-gapped bundle.");
+    return;
+  }
+  const max = state.config.airgap.maxUploadBytes;
+  const total = todo.reduce((n, t) => n + t.file.size, 0);
+  if (fromFolder && !confirm(`Upload ${todo.length} files (${fmtBytes(total)}) from image-artifacts?`)) return;
+  state.uploading = true;
+  const list = $("#uploads");
+  const rows = todo.map((t) => {
+    const status = el("span", { class: "muted" }, "waiting");
+    const bar = el("progress", { max: "1", value: "0" });
+    const li = el("li", {}, el("span", { class: "name", title: t.name }, t.name), status, bar);
+    list.append(li);
+    return { ...t, li, status, bar };
+  });
+  for (const r of rows) {
+    if (max && r.file.size > max) {
+      r.status.textContent = `larger than the ${fmtBytes(max)} limit`;
+      r.status.className = "failed";
+      continue;
+    }
+    try {
+      await uploadOne(r.file, r.name, r);
+      r.li.remove();
+    } catch (e) {
+      r.status.textContent = e.message;
+      r.status.className = "failed";
+    }
+    await refreshArtifacts();
+  }
+  state.uploading = false;
 }
 
 /* ---------- GPU ---------- */
@@ -387,6 +560,13 @@ function collectRequest() {
     extraDebs: f.extraDebs.value,
     extraRpms: f.extraRpms.value,
   };
+  const network = networkMode();
+  if (network === "airgap") {
+    req.airgap = true;
+    const bundles = [...f.osPackageBundles.selectedOptions].map((o) => o.value);
+    if (bundles.length) req.osPackageBundles = bundles;
+  }
+  if (network === "harvest") req.harvestPackages = true;
   if (fipsSelected()) req.fips = true;
   if (stigSelected()) req.stig = req.fips = true;
   if (gpuSelected()) {
@@ -489,7 +669,9 @@ async function refreshBuilds() {
       el("td", { class: "mono" }, b.imageName,
         b.request?.fips ? el("span", { class: "tag" }, "FIPS") : null,
         b.request?.stig ? el("span", { class: "tag" }, "STIG") : null,
-        b.request?.gpu ? el("span", { class: "tag", title: b.request.gpu.name }, b.request.gpu.mode === "vgpu" ? "vGPU" : "GPU") : null),
+        b.request?.gpu ? el("span", { class: "tag", title: b.request.gpu.name }, b.request.gpu.mode === "vgpu" ? "vGPU" : "GPU") : null,
+        b.request?.airgap ? el("span", { class: "tag", title: "Air-gapped: installed only from the artifact store" }, "AIR-GAPPED") : null,
+        b.request?.harvestPackages ? el("span", { class: "tag", title: "Saves its OS packages to the artifact store" }, "HARVEST") : null),
       el("td", {}, osLabel(b.os)),
       el("td", { class: "mono" }, b.request?.kubernetesVersion || "—"),
       el("td", {}, fmtTime(b.startedAt || b.createdAt)),
@@ -511,6 +693,9 @@ function renderDetailHeader(b) {
     ["FIPS 140", r.fips ? "Yes" : null],
     ["DISA STIG", r.stig ? "Yes. Scan report and exceptions in the image at /usr/share/image-builder/stig; summary at the end of the log" : null],
     ["GPU", r.gpu ? `${r.gpu.name} (${r.gpu.mode === "vgpu" ? "vGPU profile, vGPU guest driver" : "passthrough, NVIDIA data center driver"}). The build fails unless nvidia-smi sees it.` : null],
+    ["Network", r.airgap
+      ? `Air-gapped, from the artifact store${r.osPackageBundles?.length ? ` (${r.osPackageBundles.join(", ")})` : ""}`
+      : r.harvestPackages ? "Online; saves its OS packages to the artifact store when it finishes provisioning" : null],
     ["Cluster", r.clusterName],
     ["Subnet", r.subnetName],
     ["VM size", r.cpus ? `${r.cpus} vCPU · ${r.memoryMB} MB · ${r.diskSizeGB} GB` : null],
@@ -664,6 +849,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     f.kubernetesVersion.select();
   });
   $("#refresh").addEventListener("click", refreshBuilds);
+  for (const [id, fromFolder] of [["#artifact-files", false], ["#artifact-folder", true]]) {
+    const input = $(id);
+    input.addEventListener("change", async () => {
+      const files = [...input.files];
+      input.value = "";
+      if (files.length) await uploadArtifacts(files, fromFolder);
+    });
+  }
   $("#gpu-refresh").addEventListener("click", () => loadGPUs(true));
   $("#detail-close").addEventListener("click", closeDetail);
   $("#detail").addEventListener("close", () => { stopLogs(); state.detailId = null; });
@@ -676,5 +869,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#submit").disabled = true;
   }
   await refreshBuilds();
+  await refreshArtifacts();
   setInterval(refreshBuilds, 5000);
+  // Harvesting builds add bundles; uploads refresh the list themselves.
+  setInterval(() => { if (!state.uploading) refreshArtifacts(); }, 30000);
 });

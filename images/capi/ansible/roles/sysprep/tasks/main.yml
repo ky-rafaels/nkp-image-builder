@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ---
+# Before anything clears the package caches: a harvesting build turns the
+# packages it downloaded into an OS package bundle (roles/airgap).
+- name: Harvest the downloaded packages into an OS package bundle
+  ansible.builtin.include_role:
+    name: airgap
+    tasks_from: harvest
+  when: (airgap_harvest_dir | default('')) | length > 0
+
 - name: Import Debian sysprep tasks
   ansible.builtin.import_tasks: debian.yml
   when: ansible_facts['os_family'] == "Debian"
@@ -31,6 +39,15 @@
 - name: Import Photon sysprep tasks
   ansible.builtin.import_tasks: photon.yml
   when: ansible_facts['os_family'] == "VMware Photon OS"
+
+# After the OS tasks above re-enabled the repos the build disabled.
+- name: Remove what air-gapped and harvesting builds added
+  ansible.builtin.include_role:
+    name: airgap
+    tasks_from: cleanup
+  when: >-
+    (airgap_artifacts_dir | default('')) | length > 0
+    or (airgap_harvest_dir | default('')) | length > 0
 
 - name: Remove containerd http proxy conf file if needed
   ansible.builtin.file:

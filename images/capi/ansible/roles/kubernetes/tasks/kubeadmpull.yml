@@ -38,6 +38,15 @@
 
 - name: Kubeadm pull images
   ansible.builtin.command: kubeadm config images pull --config /etc/kubeadm.yml --cri-socket {{ containerd_cri_socket }}
+  when: (airgap_artifacts_dir | default('')) | length == 0
+
+# Air-gapped builds load the images from NKP's image bundle instead, and check
+# kubeadm's images and the pause image are among them.
+- name: Load the images from the air-gapped image bundle
+  ansible.builtin.include_role:
+    name: airgap
+    tasks_from: images
+  when: (airgap_artifacts_dir | default('')) | length > 0
 
 # containerd starts every pod sandbox from pause_image (`sandbox` in its
 # config), not from kubeadm's imageRepository. When kubernetes_container_registry
@@ -55,6 +64,7 @@
   delay: 10
   until: kubernetes_pause_pull is succeeded
   changed_when: true
+  when: (airgap_artifacts_dir | default('')) | length == 0
 
 - name: Delete kubeadm config
   ansible.builtin.file:

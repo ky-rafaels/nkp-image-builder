@@ -1,0 +1,11 @@
+# Air-gapped build: OS package bundles uploaded by image-builder. Removed by
+# sysprep.
+{% for b in airgap_os_bundles %}
+[image-builder-airgap-{{ loop.index }}]
+name=Air-gapped packages from {{ b }}
+baseurl=file://{{ airgap_remote_dir }}/repos/{{ b | regex_replace('\.tar\.gz$', '') }}
+enabled=1
+gpgcheck=0
+module_hotfixes=1
+
+{% endfor %}

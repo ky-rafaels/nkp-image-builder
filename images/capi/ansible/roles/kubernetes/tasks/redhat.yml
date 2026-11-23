@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ---
+# Air-gapped builds install Kubernetes from the OS package bundle's repo.
 - name: Add the Kubernetes repo
+  when: (airgap_artifacts_dir | default('')) | length == 0
   ansible.builtin.yum_repository:
     name: kubernetes
     description: the kubernetes yum repo
@@ -24,7 +26,7 @@
   ansible.builtin.rpm_key:
     state: present
     key: "{{ kubernetes_rpm_gpg_key }}"
-  when: kubernetes_rpm_gpg_check | bool
+  when: kubernetes_rpm_gpg_check | bool and (airgap_artifacts_dir | default('')) | length == 0
 
 - name: Install Kubernetes
   ansible.builtin.dnf:
@@ -32,15 +34,16 @@
     allow_downgrade: true
     state: present
     lock_timeout: 60
-    disable_excludes: "kubernetes"
+    disable_excludes: "{{ 'kubernetes' if (airgap_artifacts_dir | default('')) | length == 0 else omit }}"
     disable_plugin: "priorities"
   vars:
-    # In FIPS mode crictl comes from the same signed repo as the rest of
-    # Kubernetes instead of a GitHub download (crictl-url.yml is skipped).
+    # In FIPS, air-gapped and harvesting builds crictl comes from the same
+    # repo as the rest of Kubernetes instead of a GitHub download
+    # (crictl-url.yml is skipped).
     packages: >-
       {{ [
         'kubelet-' + kubernetes_rpm_version,
         'kubeadm-' + kubernetes_rpm_version,
         'kubectl-' + kubernetes_rpm_version,
         'kubernetes-cni' + ('-' + kubernetes_cni_rpm_version if kubernetes_cni_rpm_version else ''),
-      ] + (['cri-tools-' + crictl_version] if fips_enabled | bool else []) }}
+      ] + (['cri-tools-' + crictl_version] if kubernetes_crictl_from_package | bool else []) }}

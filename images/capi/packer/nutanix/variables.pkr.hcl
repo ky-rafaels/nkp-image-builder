@@ -803,3 +803,30 @@ variable "gpu_nvidia_vgpu_license_token" {
   default     = env("NVIDIA_VGPU_LICENSE_TOKEN")
   sensitive   = true
 }
+
+# --- Air-gapped builds (ansible/roles/airgap) ---
+variable "airgap_artifacts_dir" {
+  type        = string
+  description = "Air-gapped build: directory in the build pod with NKP's image-artifacts layout (containerd-*.tar.gz, images/kubernetes-images-*.tar) plus OS package bundles. The VM then installs only from it and downloads nothing; boot it from an image already in Prism Central (source_image_name/uuid). Empty means an online build."
+  default     = ""
+}
+variable "airgap_os_package_bundles" {
+  type        = string
+  description = "Air-gapped build: space-separated OS package bundle file names in airgap_artifacts_dir. Empty picks <k8s>_<os>_<os version>_x86_64[_fips][_stig][_gpu].tar.gz."
+  default     = ""
+}
+variable "airgap_harvest_dir" {
+  type        = string
+  description = "Online build: also save every package it downloads as an OS package bundle in this directory in the build pod, named <k8s>_<os>_<os version>_x86_64[_fips][_stig][_gpu].tar.gz, for air-gapped builds of the same base image and options."
+  default     = ""
+}
+variable "airgap_harvest_upload_url" {
+  type        = string
+  description = "Base URL the harvested bundle is PUT to under its name (the web UI's artifact store), with the bearer token in $IB_ARTIFACTS_TOKEN."
+  default     = ""
+}
+variable "vm_tools_dir" {
+  type        = string
+  description = "Directory in the build pod with linux/amd64 tools uploaded to the VM instead of downloaded there: goss-<goss_version>-linux-<goss_arch> and mindthegap-linux-amd64. The builder image sets $IB_VM_TOOLS_DIR."
+  default     = env("IB_VM_TOOLS_DIR")
+}

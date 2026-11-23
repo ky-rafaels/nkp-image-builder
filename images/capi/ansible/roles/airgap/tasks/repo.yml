@@ -1,0 +1,116 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Uploads and unpacks the OS package bundles (prepare.yml picked them) and
+# makes them the VM's only package repos. Idempotent: the setup role runs
+# this again after its own disable_public_repos step, which also disables
+# these repo files, and the uploads are skipped when unchanged.
+---
+- name: Create the air-gapped bundle directory
+  ansible.builtin.file:
+    path: "{{ airgap_remote_dir }}/repos"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Upload the OS package bundles
+  ansible.builtin.copy:
+    src: "{{ airgap_artifacts_dir }}/{{ item }}"
+    dest: "{{ airgap_remote_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ airgap_os_bundles }}"
+  register: airgap_bundle_upload
+
+# Not a handler: the unpack below must see the cleared directory.
+- name: Clear OS package bundles that changed  # noqa: no-handler
+  ansible.builtin.file:
+    path: "{{ airgap_remote_dir }}/repos/{{ item.item | regex_replace('\\.tar\\.gz$', '') }}"
+    state: absent
+  loop: "{{ airgap_bundle_upload.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.changed
+
+- name: Create the OS package repo directories
+  ansible.builtin.file:
+    path: "{{ airgap_remote_dir }}/repos/{{ item | regex_replace('\\.tar\\.gz$', '') }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ airgap_os_bundles }}"
+
+# Bundles from `nkp create package-bundle` and from harvesting builds both hold
+# the packages and the repo metadata (repodata/ or Packages.gz) at the top.
+- name: Unpack the OS package bundles
+  ansible.builtin.unarchive:
+    src: "{{ airgap_remote_dir }}/{{ item }}"
+    dest: "{{ airgap_remote_dir }}/repos/{{ item | regex_replace('\\.tar\\.gz$', '') }}"
+    remote_src: true
+    creates: >-
+      {{ airgap_remote_dir }}/repos/{{ item | regex_replace('\.tar\.gz$', '') }}/{{
+         'repodata/repomd.xml' if ansible_facts['os_family'] == 'RedHat' else 'Packages.gz' }}
+    extra_opts:
+      - --no-same-owner
+  loop: "{{ airgap_os_bundles }}"
+
+- name: Check each OS package bundle is a package repo
+  ansible.builtin.stat:
+    path: >-
+      {{ airgap_remote_dir }}/repos/{{ item | regex_replace('\.tar\.gz$', '') }}/{{
+         'repodata/repomd.xml' if ansible_facts['os_family'] == 'RedHat' else 'Packages.gz' }}
+  loop: "{{ airgap_os_bundles }}"
+  register: airgap_repo_index
+
+- name: Fail if an OS package bundle has no repo metadata
+  ansible.builtin.fail:
+    msg: >-
+      {{ item.item }} has no {{ 'repodata/repomd.xml' if ansible_facts['os_family'] == 'RedHat' else 'Packages.gz' }}
+      at its top level, so it is not an OS package bundle for {{ ansible_facts['distribution'] }}.
+  loop: "{{ airgap_repo_index.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not item.stat.exists
+
+# Bundles carry packages from several signers (the distro, pkgs.k8s.io,
+# D2iQ, NVIDIA) and no keys, so, as with NKP's own bundles, signatures aren't
+# checked; check the bundle file's checksum instead.
+- name: Configure the OS package bundles as dnf repos
+  ansible.builtin.template:
+    src: image-builder-airgap.repo.j2
+    dest: /etc/yum.repos.d/image-builder-airgap.repo
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Configure the OS package bundles as apt repos
+  ansible.builtin.copy:
+    content: |
+      {% for b in airgap_os_bundles %}
+      deb [trusted=yes] file:{{ airgap_remote_dir }}/repos/{{ b | regex_replace('\.tar\.gz$', '') }} ./
+      {% endfor %}
+    dest: /etc/apt/sources.list.d/image-builder-airgap.list
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Refresh the package metadata from the OS package bundles
+  ansible.builtin.command: >-
+    {{ 'dnf -y makecache' if ansible_facts['os_family'] == 'RedHat' else 'apt-get update' }}
+  changed_when: false

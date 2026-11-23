@@ -1,0 +1,91 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# First step of an air-gapped or harvesting build (ansible/airgap-prepare.yml),
+# before anything on the VM installs a package: check the artifacts, then
+# replace every package repo with the uploaded OS package bundles, or, when
+# harvesting, keep every package the build downloads.
+---
+- name: Work out the air-gapped artifact names
+  ansible.builtin.include_tasks: facts.yml
+
+- name: Check the OS is supported for air-gapped builds
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] in ['Debian', 'RedHat']
+    fail_msg: >-
+      Air-gapped and harvesting builds are supported on Ubuntu, RHEL and Rocky
+      Linux, not {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+- name: Check both air-gapped modes aren't set
+  ansible.builtin.assert:
+    that: not (airgap_enabled | bool and airgap_harvest | bool)
+    fail_msg: >-
+      airgap_artifacts_dir (an air-gapped build) and airgap_harvest_dir (an
+      online build that saves its packages) can't be used together.
+    quiet: true
+
+# The RHEL/Rocky data center driver comes from NVIDIA's modular CUDA repo,
+# whose module streams a flat package bundle can't carry. The vGPU driver is
+# a file, and Ubuntu's driver comes from the Ubuntu archive.
+- name: Check the GPU driver can be installed air-gapped
+  ansible.builtin.assert:
+    that: >-
+      not (gpu_enabled | default(false) | bool)
+      or ansible_facts['os_family'] == 'Debian'
+      or gpu_nvidia_vgpu_driver_url | default('') | length > 0
+    fail_msg: >-
+      Air-gapped GPU builds on {{ ansible_facts['distribution'] }} need the vGPU
+      guest driver (gpu_nvidia_vgpu_driver_url); NVIDIA's data center driver for
+      RHEL/Rocky comes from a modular repo that can't be bundled. Ubuntu builds
+      can use the data center driver.
+    quiet: true
+  when: airgap_enabled | bool
+
+- name: Pick and check the air-gapped artifacts
+  ansible.builtin.include_tasks: select.yml
+  when: airgap_enabled | bool
+
+- name: Report the OS package bundles
+  ansible.builtin.debug:
+    msg: "Installing packages only from {{ airgap_os_bundles | join(', ') }}"
+  when: airgap_enabled | bool
+
+# Same .disabled naming as the setup role's disable_public_repos, so sysprep
+# puts them back.
+- name: Disable the existing package repos
+  when: airgap_enabled | bool
+  block:
+    - name: Find the existing package repos
+      ansible.builtin.find:
+        depth: 1
+        paths: "{{ ['/etc/yum.repos.d'] if ansible_facts['os_family'] == 'RedHat' else ['/etc/apt', '/etc/apt/sources.list.d'] }}"
+        patterns: "{{ ['*.repo'] if ansible_facts['os_family'] == 'RedHat' else ['*.list', '*.sources'] }}"
+        excludes: image-builder-airgap.*
+      register: airgap_existing_repos
+
+    - name: Disable the existing package repos
+      ansible.builtin.command: mv {{ item.path }} {{ item.path }}.disabled
+      loop: "{{ airgap_existing_repos.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      changed_when: true
+
+- name: Install from the OS package bundles
+  ansible.builtin.include_tasks: repo.yml
+  when: airgap_enabled | bool
+
+- name: Keep the packages this build downloads
+  ansible.builtin.include_tasks: harvest-start.yml
+  when: airgap_harvest | bool

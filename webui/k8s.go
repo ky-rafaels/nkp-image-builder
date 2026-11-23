@@ -148,8 +148,9 @@ func (b *Builds) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-// Logs streams the build pod's logs. When follow is set it blocks until the
-// container exits or ctx is cancelled.
+// Logs streams the build pod's logs: its init containers' (an air-gapped
+// build downloading its artifacts), then the build's. When follow is set it
+// blocks until the build container exits or ctx is cancelled.
 func (b *Builds) Logs(ctx context.Context, id string, follow bool, w io.Writer) error {
 	if _, err := b.job(ctx, id); err != nil {
 		return err
@@ -158,8 +159,28 @@ func (b *Builds) Logs(ctx context.Context, id string, follow bool, w io.Writer) 
 	if err != nil {
 		return err
 	}
-	stream, err := b.client.CoreV1().Pods(b.cfg.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-		Container: "image-builder",
+	if len(pod.Spec.InitContainers) > 0 {
+		for _, c := range pod.Spec.InitContainers {
+			if err := b.streamLogs(ctx, pod.Name, c.Name, follow, w); err != nil {
+				return err
+			}
+		}
+		if !follow {
+			if !started(pod, buildContainer) {
+				return nil
+			}
+		} else if pod, err = b.waitForContainer(ctx, pod.Name, buildContainer); err != nil || pod == nil {
+			return err // nil, nil: an init container failed, and its log says why
+		}
+	}
+	return b.streamLogs(ctx, pod.Name, buildContainer, follow, w)
+}
+
+const buildContainer = "image-builder"
+
+func (b *Builds) streamLogs(ctx context.Context, pod, container string, follow bool, w io.Writer) error {
+	stream, err := b.client.CoreV1().Pods(b.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{
+		Container: container,
 		Follow:    follow,
 	}).Stream(ctx)
 	if err != nil {
@@ -168,6 +189,38 @@ func (b *Builds) Logs(ctx context.Context, id string, follow bool, w io.Writer) 
 	defer stream.Close()
 	_, err = io.Copy(w, stream)
 	return err
+}
+
+// started: the container is running or has run.
+func started(pod *corev1.Pod, container string) bool {
+	for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
+		if cs.Name == container {
+			return cs.State.Running != nil || cs.State.Terminated != nil
+		}
+	}
+	return false
+}
+
+// waitForContainer waits for a container of the pod to start. It returns nil,
+// nil if the pod failed first.
+func (b *Builds) waitForContainer(ctx context.Context, name, container string) (*corev1.Pod, error) {
+	for {
+		pod, err := b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if started(pod, container) {
+			return pod, nil
+		}
+		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+			return nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (b *Builds) waitForPod(ctx context.Context, id string, wait bool) (*corev1.Pod, error) {
@@ -186,8 +239,14 @@ func (b *Builds) waitForPod(ctx context.Context, id string, wait bool) (*corev1.
 			if p.Status.Phase != corev1.PodPending {
 				return p, nil
 			}
+			// Init containers log while the pod is still pending.
+			for _, c := range p.Spec.InitContainers {
+				if started(p, c.Name) {
+					return p, nil
+				}
+			}
 			// Container may already have failed to start (bad image, missing secret).
-			for _, cs := range p.Status.ContainerStatuses {
+			for _, cs := range append(p.Status.InitContainerStatuses, p.Status.ContainerStatuses...) {
 				if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "ContainerCreating" && w.Reason != "PodInitializing" {
 					return nil, fmt.Errorf("build pod is waiting: %s: %s", w.Reason, w.Message)
 				}

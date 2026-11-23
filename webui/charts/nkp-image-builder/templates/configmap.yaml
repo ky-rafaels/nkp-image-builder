@@ -33,5 +33,12 @@ data:
       "stig" (.Values.stig | default dict)
       "gpu" (.Values.gpu | default dict)
       "containerd" (.Values.containerd | default dict)
+      "airgap" (dict
+        "enabled" .Values.airgap.enabled
+        "artifactsDir" "/var/lib/nkp-image-builder/artifacts"
+        "serviceURL" (printf "http://%s.%s.svc:%v" (include "nkpib.fullname" .) .Release.Namespace .Values.service.port)
+        "tokenSecret" (include "nkpib.artifactsTokenSecretName" .)
+        "buildVolumeSizeLimit" .Values.airgap.buildVolumeSizeLimit
+        "maxUploadBytes" (.Values.airgap.maxUploadBytes | int64))
     }}
     {{- $cfg | toPrettyJson | nindent 4 }}

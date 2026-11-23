@@ -49,3 +49,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "nkpib.image" -}}
 {{- printf "%s:%s" .repository (default $.root.Chart.AppVersion .tag) }}
 {{- end }}
+
+{{- define "nkpib.artifactsClaimName" -}}
+{{- default (printf "%s-artifacts" (include "nkpib.fullname" .)) .Values.airgap.persistence.existingClaim }}
+{{- end }}
+
+{{- define "nkpib.artifactsTokenSecretName" -}}
+{{- printf "%s-artifacts-token" (include "nkpib.fullname" .) }}
+{{- end }}

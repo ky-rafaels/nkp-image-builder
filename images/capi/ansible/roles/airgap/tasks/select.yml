@@ -1,0 +1,81 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Picks the OS package bundles for an air-gapped build (airgap_os_bundles)
+# and checks the artifacts the build needs are in the build pod. Every
+# playbook run needs this again: Packer runs each one separately.
+---
+- name: Work out the air-gapped artifact names
+  ansible.builtin.include_tasks: facts.yml
+
+- name: Check the air-gapped artifacts
+  when: airgap_enabled | bool
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Check the artifacts directory exists
+      ansible.builtin.stat:
+        path: "{{ airgap_artifacts_dir }}"
+      register: airgap_dir_stat
+
+    - name: Fail if the artifacts directory is missing
+      ansible.builtin.fail:
+        msg: airgap_artifacts_dir {{ airgap_artifacts_dir }} does not exist in the build pod.
+      when: not (airgap_dir_stat.stat.isdir | default(false))
+
+    - name: Look for this build's OS package bundle
+      ansible.builtin.stat:
+        path: "{{ airgap_artifacts_dir }}/{{ item }}"
+      loop: "{{ [airgap_os_bundle_name, airgap_os_bundle_fallback_name] | unique }}"
+      register: airgap_bundle_candidates
+      when: airgap_os_package_bundles | length == 0
+
+    - name: Pick the OS package bundles
+      ansible.builtin.set_fact:
+        airgap_os_bundles: >-
+          {{ airgap_os_package_bundles if airgap_os_package_bundles | length > 0
+             else (airgap_bundle_candidates.results | selectattr('stat.exists', 'defined')
+                   | selectattr('stat.exists') | map(attribute='item') | list)[:1] }}
+
+    - name: Fail if there is no OS package bundle
+      ansible.builtin.fail:
+        msg: >-
+          No OS package bundle for this build in {{ airgap_artifacts_dir }}. Expected
+          {{ [airgap_os_bundle_name, airgap_os_bundle_fallback_name] | unique | join(' or ') }},
+          made by a harvesting build (airgap_harvest_dir) of the same OS, base image and
+          options, or by `nkp create package-bundle`; or name bundles in airgap_os_package_bundles.
+      when: airgap_os_bundles | length == 0
+
+    - name: Check the named OS package bundles exist
+      ansible.builtin.stat:
+        path: "{{ airgap_artifacts_dir }}/{{ item }}"
+      loop: "{{ airgap_os_bundles }}"
+      register: airgap_bundle_stats
+
+    - name: Fail if a named OS package bundle is missing
+      ansible.builtin.fail:
+        msg: "OS package bundle {{ item.item }} is not in {{ airgap_artifacts_dir }}."
+      loop: "{{ airgap_bundle_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+
+    # Otherwise the goss step after Ansible would download goss on the VM.
+    - name: Fail if there is no goss binary to upload
+      ansible.builtin.fail:
+        msg: >-
+          Air-gapped builds upload goss from the build pod, but goss_local_binary is
+          empty. The builder image provides it; set vm_tools_dir to a directory with
+          goss-<version>-linux-amd64 when building elsewhere.
+      when: goss_local_binary | default('') | length == 0

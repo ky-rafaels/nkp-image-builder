@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var reDriverBranch = regexp.MustCompile(`^[0-9]{3,4}$`)
@@ -33,6 +34,29 @@ type Config struct {
 	// Containerd pins containerd and runc per Kubernetes minor ("v1.35").
 	// Entries replace the built-in pair for the same minor.
 	Containerd map[string]ContainerdRelease `json:"containerd"`
+	// Airgap offers air-gapped builds, which install only from the artifact
+	// store, and harvesting builds, which fill it.
+	Airgap AirgapConfig `json:"airgap"`
+}
+
+// AirgapConfig is the artifact store: a directory on the UI pod's
+// PersistentVolume. Build pods download what an air-gapped build needs from
+// it into an emptyDir, so the volume needs no ReadWriteMany.
+type AirgapConfig struct {
+	Enabled bool `json:"enabled"`
+	// ArtifactsDir is the store's directory in the UI pod.
+	ArtifactsDir string `json:"artifactsDir"`
+	// ServiceURL is how build pods reach the UI, e.g.
+	// http://nkp-image-builder.nkp-image-builder.svc:80.
+	ServiceURL string `json:"serviceURL"`
+	// TokenSecret is the Secret whose "token" build pods send to the store.
+	// The UI reads the same token from $ARTIFACTS_TOKEN.
+	TokenSecret string `json:"tokenSecret"`
+	// BuildVolumeSizeLimit caps the build pod's emptyDir for artifacts and
+	// harvested packages. Default 40Gi.
+	BuildVolumeSizeLimit string `json:"buildVolumeSizeLimit"`
+	// MaxUploadBytes caps one uploaded artifact. Default 20 GiB.
+	MaxUploadBytes int64 `json:"maxUploadBytes"`
 }
 
 // ContainerdRelease is the containerd and runc a build installs for one
@@ -435,6 +459,20 @@ func loadConfig(path string) (*Config, error) {
 			}
 		}
 	}
+	if a := cfg.Airgap; a.Enabled {
+		if a.ArtifactsDir == "" || a.TokenSecret == "" {
+			return nil, fmt.Errorf("airgap.artifactsDir and airgap.tokenSecret must be set when airgap.enabled")
+		}
+		if u, err := url.Parse(a.ServiceURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("airgap.serviceURL must be the http(s) URL build pods reach this service at")
+		}
+		if _, err := resource.ParseQuantity(a.BuildVolumeSizeLimit); err != nil {
+			return nil, fmt.Errorf("airgap.buildVolumeSizeLimit: %w", err)
+		}
+		if a.MaxUploadBytes < 1 {
+			return nil, fmt.Errorf("airgap.maxUploadBytes must be positive")
+		}
+	}
 	if b := cfg.GPU.NVIDIA.DriverBranch; b != "" && !reDriverBranch.MatchString(b) {
 		return nil, fmt.Errorf("gpu.nvidia.driverBranch must be a driver branch number like 580, not %q", b)
 	}
@@ -499,6 +537,13 @@ func (c *Config) applyDefaults() {
 			c.Containerd[minor] = rel
 		}
 	}
+	if c.Airgap.BuildVolumeSizeLimit == "" {
+		c.Airgap.BuildVolumeSizeLimit = "40Gi"
+	}
+	if c.Airgap.MaxUploadBytes == 0 {
+		c.Airgap.MaxUploadBytes = 20 << 30
+	}
+	c.Airgap.ServiceURL = strings.TrimSuffix(c.Airgap.ServiceURL, "/")
 	d := &c.Defaults
 	if d.ImageNameTemplate == "" {
 		d.ImageNameTemplate = defaultImageNameTemplate

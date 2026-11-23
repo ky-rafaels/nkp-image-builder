@@ -1,0 +1,122 @@
+# Copyright 2026 The Kubernetes Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Air-gapped build, in place of pulling the kubeadm and pause images: load
+# NKP's image bundle for this Kubernetes version
+# (images/kubernetes-images-<version>-d2iq.1[-fips].tar, a mindthegap
+# registry bundle) into containerd, then check kubeadm's images and the pause
+# image are there. Expects /etc/kubeadm.yml (kubeadmpull.yml writes it).
+---
+- name: Work out the air-gapped artifact names
+  ansible.builtin.include_tasks: facts.yml
+
+- name: Find the image bundles for Kubernetes {{ airgap_kubernetes_version }}
+  ansible.builtin.find:
+    paths: "{{ airgap_artifacts_dir }}/images"
+    patterns: >-
+      {{ '^kubernetes-images-' ~ (airgap_kubernetes_version | regex_escape) ~
+         ('-.*-fips' if fips_enabled | default(false) | bool else '-(?!.*-fips).*') ~ '\.tar(\.gz)?$' }}
+    use_regex: true
+    file_type: file
+  register: airgap_image_bundles
+  delegate_to: localhost
+  become: false
+
+- name: Fail if there is no image bundle
+  ansible.builtin.fail:
+    msg: >-
+      No image bundle for Kubernetes {{ airgap_kubernetes_version }} in {{ airgap_artifacts_dir }}/images:
+      add images/kubernetes-images-{{ airgap_kubernetes_version }}-d2iq.1{{ '-fips' if fips_enabled | default(false) | bool else '' }}.tar
+      from the NKP air-gapped bundle's image-artifacts/images directory.
+  when: airgap_image_bundles.files | length == 0
+
+- name: Fail if there is no mindthegap to load the image bundles with
+  ansible.builtin.fail:
+    msg: airgap_mindthegap_binary (a linux/amd64 mindthegap in the build pod) is not set; the builder image provides it.
+  when: airgap_mindthegap_binary | length == 0
+
+- name: Create the image bundle directory
+  ansible.builtin.file:
+    path: "{{ airgap_remote_dir }}/images"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Upload mindthegap
+  ansible.builtin.copy:
+    src: "{{ airgap_mindthegap_binary }}"
+    dest: "{{ airgap_remote_dir }}/mindthegap"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Upload the image bundles
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ airgap_remote_dir }}/images/{{ item.path | basename }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ airgap_image_bundles.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+# mindthegap runs `ctr`, which the containerd bundle installs in /usr/local/bin,
+# off sudo's secure_path.
+- name: Load the image bundles into containerd
+  ansible.builtin.command:
+    argv:
+      - "{{ airgap_remote_dir }}/mindthegap"
+      - import
+      - image-bundle
+      - --image-bundle={{ airgap_remote_dir }}/images/{{ item.path | basename }}
+      - --containerd-namespace=k8s.io
+  environment:
+    PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+  loop: "{{ airgap_image_bundles.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  changed_when: true
+
+- name: List the images kubeadm needs
+  ansible.builtin.command: kubeadm config images list --config /etc/kubeadm.yml
+  register: airgap_kubeadm_images
+  changed_when: false
+
+- name: Check the images kubeadm needs and the pause image were loaded
+  ansible.builtin.command: >-
+    crictl --runtime-endpoint unix://{{ containerd_cri_socket }}
+    --image-endpoint unix://{{ containerd_cri_socket }}
+    inspecti -q {{ item }}
+  loop: "{{ (airgap_kubeadm_images.stdout_lines + [pause_image]) | unique }}"
+  register: airgap_image_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if the image bundles miss an image
+  ansible.builtin.fail:
+    msg: >-
+      The image bundles ({{ airgap_image_bundles.files | map(attribute='path') | map('basename') | join(', ') }})
+      don't have {{ airgap_image_check.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | join(', ') }}.
+      Use the bundle from the NKP release that ships Kubernetes {{ airgap_kubernetes_version }}.
+  when: airgap_image_check.results | rejectattr('rc', 'equalto', 0) | list | length > 0
+
+- name: Remove the image bundles and mindthegap from the VM
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ airgap_remote_dir }}/images"
+    - "{{ airgap_remote_dir }}/mindthegap"
